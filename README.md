@@ -1,13 +1,37 @@
 # CuanticaDistribuida
 
-Repositorio de Trabajo de Fin de Máster sobre corrección cuántica de errores y decodificación moderna.
+Repositorio de Trabajo de Fin de Máster sobre corrección de errores cuánticos en arquitectura cloud distribuida.
 
 ---
 
 ## Índice
 
+- [Configuración de entorno](#configuración-de-entorno)
 - [Documentación y Recursos](#documentación-y-recursos)
 - [Estructura del Código](#estructura-del-código)
+
+---
+
+## Configuración de entorno
+
+1. **Instala [uv](https://docs.astral.sh/uv/):**
+
+Con script:
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+O con Homebrew (MacOS):
+```bash
+brew install uv
+```
+
+2. **Instala las dependencias del proyecto:**
+```bash
+uv sync
+```
+
+Esto instalará todas las dependencias definidas en `pyproject.toml` y `uv.lock`.
 
 ---
 

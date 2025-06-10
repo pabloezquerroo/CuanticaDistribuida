@@ -1,0 +1,16 @@
+# IDE 
+.vscode/
+
+# Macos
+**/.DS_Store
+
+# Environments
+.env
+.venv
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Entorno local de Python
+.python-version
