@@ -1,6 +1,6 @@
 # CuanticaDistribuida
 
-Repositorio de Trabajo de Fin de Máster sobre corrección cuántica de errores y decodificación moderna.
+Repositorio de Trabajo de Fin de Máster sobre corrección de errores cuánticos en arquitectura cloud distribuida.
 
 ---
 
