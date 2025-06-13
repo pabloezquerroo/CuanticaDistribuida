@@ -76,7 +76,9 @@ if __name__ == "__main__":
         #a1,a2,a3=26,6,8
         #b1,b2,b3=7,9,20
 
-        # [[72,12,6]]
+        # * El 6 del tercer parametro de la linea inferior equivale a la distancia
+        # * que se define el la línea 120.
+        # [[72,12,6]] 
         #ell,m = 6,6
         #a1,a2,a3=3,1,2
         #b1,b2,b3=3,1,2
@@ -174,7 +176,7 @@ if __name__ == "__main__":
             if ldpc_v2 is True:
 
                 # https://software.roffe.eu/ldpc/quantum_decoder.html               
-                _bp = BpDecoder(pcm, max_iter=100, error_rate=float(p), bp_method="product_sum", channel_probs=matrices.priors)
+                _bp = BpDecoder(pcm, max_iter=100, error_rate=float(p), bp_method="product_sum", error_channel=matrices.priors) #  error_channel antes era channel_probs
                 _bplsd = BpLsdDecoder(pcm, max_iter=100, error_rate=float(p), bp_method="product_sum", osd_method = 'lsd_cs', osd_order = 2)
                 _bposd = BpOsdDecoder(pcm, max_iter=100, error_rate=float(p), bp_method="product_sum", schedule = 'parallel', osd_method="osd_0")
 
