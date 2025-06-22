@@ -1,40 +1,61 @@
+from packaging.version import Version
+from ldpc import __version__ as ldpc_version
+print("Using LDPC version v{}".format(ldpc_version))
+
+from ldpc import BpDecoder  
+from ldpc.bplsd_decoder import BpLsdDecoder
+from ldpc import BpOsdDecoder  
+
+import numpy as np
+import time
+
+from scipy import sparse 
+from dem_to_matrices import detector_error_model_to_check_matrices
+from IBM_STIM import create_bivariate_bicycle_codes, build_circuit, select_configuration
+
+
+""" 
+! Flujo de trabajo
+
+El orquerstador lee los argumentos de las colas SQS e invoca al worker pasando la información mediante eventos.
+El worker lee la información del evento e inicia su ejecucion.
+
+Informacion dentro del evento:
+    - codeConfig: Código a probar
+    - p: tasa de error física a simular 
+    - NMCs_range: rango de Monte Carlo trials de este worker
+    - BP_arguments: argumentos para el decodificador BP
+    - BPLSD_arguments: argumentos para el decodificador BPLSD
+    - BPOSD_arguments: argumentos para el decodificador BPOSD
+
+    ? Probablemente haga falta recibir un id_args para identificar el conjunto de argumentos y juntar los lotes posteriormente.
+
+    ? EJEMPLO de evento
+    event = {
+        "codeConfig": "72",
+        "p": 0.001,
+        "NMCs_range": 500,
+        "BP_arguments":  {"bp_method":"product_sum", "error_channel":"dem_error_channel"},
+        "BPLSD_arguments": {"bp_method":"product_sum", "osd_method":"lsd_cs", "osd_order":2},
+        "BPOSD_arguments": {"bp_method":"product_sum", "schedule":"parallel", "osd_method":"osd_0"}
+    }
+"""
+
 def lambda_handler(event, context=None):
-    from packaging.version import Version
-    from ldpc import __version__ as ldpc_version
-    print("Using LDPC version v{}".format(ldpc_version))
 
-    from ldpc import BpDecoder  
-    from ldpc.bplsd_decoder import BpLsdDecoder
-    from ldpc import BpOsdDecoder  
-
-    import numpy as np
-    import time
-
-    from scipy import sparse 
-    from dem_to_matrices import detector_error_model_to_check_matrices
-    from IBM_STIM import create_bivariate_bicycle_codes, build_circuit, select_configuration
-
-
-    # Time check
     time_start = time.time()
-    print("Starting time:", time_start)
 
     # Debug variables
     show_prints = False
     show_times = True
 
     # Event variables received from Lambda Orchestrator
-    """
-    Leemos variables pasados por evento de Lambda
-        - codeConfig: Código a probar
-        - NMCs_range: rango de Monte Carlo trials de este worker
-        - p: tasa de error física a simular 
-        ? Argumentos de BpDecoder, BpLsdDecoder y BpOsdDecoder ->
-    """
     codeConfig = event["codeConfig"]
     p = event["p"]
     NMCs_range = event["NMCs_range"]
-    decoder_name = event["decoder_name"]
+    BP_arguments = event.get("BP_arguments", {})
+    BPLSD_arguments = event.get("BPLSD_arguments", {})
+    BPOSD_arguments = event.get("BPOSD_arguments", {})
 
     # * Build quantum code
     # Parameters for simulation
@@ -57,60 +78,63 @@ def lambda_handler(event, context=None):
     matrices = detector_error_model_to_check_matrices(dem, allow_undecomposed_hyperedges=True)
     pcm = matrices.check_matrix                     # Parity check matrix
     observable_mat = matrices.observables_matrix    # Logical observables matrix
-    dem_error_channel = matrices.priors             # Prior error probabilities for each channel
 
-    # !     Los argumentos de BpDecoder, BpLsdDecoder y BpOsdDecoder seran recibidos por eventos ->
-    # !     El orquestador será quien lea los args de la cola SQS y los envíe.
-    # TODO:     Evaluar si es conveniente que este script se ejecute una vez por cada decoder, ->
-    # TODO:     o si es mejor que se ejecute una vez y se lean los parámetros de cada decoder
-    _bp = BpDecoder(pcm, max_iter=100, error_rate=float(p), bp_method="product_sum", error_channel=dem_error_channel)
-    _bplsd = BpLsdDecoder(pcm, max_iter=100, error_rate=float(p), bp_method="product_sum", osd_method='lsd_cs', osd_order=2)
-    _bposd = BpOsdDecoder(pcm, max_iter=100, error_rate=float(p), bp_method="product_sum", schedule='parallel', osd_method="osd_0")
+    if BP_arguments.get("error_channel") == "dem_error_channel":
+        BP_arguments["error_channel"] = matrices.priors     # Prior error probabilities for each channel 
 
+    # * Initialize decoders
+    _bp = BpDecoder(pcm, max_iter=100, error_rate=float(p), **event["BP_arguments"])
+    _bplsd = BpLsdDecoder(pcm, max_iter=100, error_rate=float(p), **event["BPLSD_arguments"])
+    _bposd = BpOsdDecoder(pcm, max_iter=100, error_rate=float(p), **event["BPOSD_arguments"])
 
-    # TODO: Guardado de los resultados
-    
+    # * Initialize variables for results
     PlBP = PlBPLSD = PlBPOSD = 0
     time_av_BP = time_av_BPLSD = time_av_BPOSD = 0
     time_max_BP = time_max_BPLSD = time_max_BPOSD = 0
 
     
     for _ in range(NMCs_range):
-        # ? Es necesario compilar el circuito cada vez?
+        # ! ¿Es necesario compilar el circuito cada iteración?
         sampler = circuit.compile_detector_sampler()
         detectors, observables = sampler.sample(1, separate_observables=True)
 
         # BP
         a = time.time()
-        pred_bp = _bp.decode(detectors[0])
+        predicted_observables = _bp.decode(detectors[0])
         b = time.time()
-        time_av_BP += (b - a) / (NMCs_range)
-        time_max_BP = max(time_max_BP, b - a)
+        time_av_BP += (b - a) / NMCs_range
 
         # BPLSD
         a = time.time()
-        pred_lsd = _bplsd.decode(detectors[0])
+        predicted_observables_lsd = _bplsd.decode(detectors[0])
         b = time.time()
-        time_av_BPLSD += (b - a) / (NMCs_range)
-        time_max_BPLSD = max(time_max_BPLSD, b - a)
+        time_av_BPLSD += (b - a) / NMCs_range
 
         # BPOSD
         a = time.time()
-        pred_osd = _bposd.decode(detectors[0])
+        predicted_observables_osd = _bposd.decode(detectors[0])
         b = time.time()
-        time_av_BPOSD += (b - a) / (NMCs_range)
-        time_max_BPOSD = max(time_max_BPOSD, b - a)
+        time_av_BPOSD += (b - a) / NMCs_range
 
         # Logical error
-        err_bp = (observable_mat @ pred_bp + observables) % 2
-        err_lsd = (observable_mat @ pred_lsd + observables) % 2
-        err_osd = (observable_mat @ pred_osd + observables) % 2
+        logical_error_bp = (observable_mat @ predicted_observables + observables) % 2
+        logical_error_lsd = (observable_mat @ predicted_observables_lsd + observables) % 2
+        logical_error_osd = (observable_mat @ predicted_observables_osd + observables) % 2
 
-        if np.any(err_bp): PlBP += 1 / (NMCs_range)
-        if np.any(err_lsd): PlBPLSD += 1 / (NMCs_range)
-        if np.any(err_osd): PlBPOSD += 1 / (NMCs_range)
+        if np.any(logical_error_bp): PlBP += 1 / NMCs_range
+        if np.any(logical_error_lsd): PlBPLSD += 1 / NMCs_range
+        if np.any(logical_error_osd): PlBPOSD += 1 / NMCs_range
 
-    return {
+    if show_times:
+        print("Execution time:", time.time() - time_start)
+    
+    # TODO: "id_args": id_args -> recibido desde el orquestador para identificar el conjunto de argumentos y juntar los lotes posteriormente.
+    results = {
+        "codeConfig": codeConfig,
+        "p": p,
+        "BP_arguments": BP_arguments,
+        "BPLSD_arguments": BPLSD_arguments,
+        "BPOSD_arguments": BPOSD_arguments,
         "PlBP": PlBP,
         "PlBPLSD": PlBPLSD,
         "PlBPOSD": PlBPOSD,
@@ -119,5 +143,24 @@ def lambda_handler(event, context=None):
         "time_av_BPLSD": time_av_BPLSD,
         "time_max_BPLSD": time_max_BPLSD,
         "time_av_BPOSD": time_av_BPOSD,
-        "time_max_BPOSD": time_max_BPOSD,
+        "time_max_BPOSD": time_max_BPOSD
     }
+
+    print("Results:")
+    for k, v in results.items():
+        print(f"{k}: {v}")
+
+    # TODO: Guardar los resultados en una dynamoDB
+
+
+if __name__ == "__main__":
+    # For local testing
+    lambda_handler({
+        "codeConfig": "72",
+        "p": 0.001,
+        "NMCs_range": 500,
+        "BP_arguments": {"bp_method": "product_sum", "error_channel": "dem_error_channel"},
+        "BPLSD_arguments": {"bp_method": "product_sum", "osd_method": "lsd_cs", "osd_order": 2},
+        "BPOSD_arguments": {"bp_method": "product_sum", "schedule": "parallel", "osd_method": "osd_0"}
+    })
+    

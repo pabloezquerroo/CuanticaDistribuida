@@ -43,8 +43,8 @@ NMCs = [10**6, 10**6, 10**6, 10**6, 10**6]
 
 
 # Physical error rates to simulate (between 0.1% and 0.5%)
-ps = np.linspace(0.001, 0.005, num=5)
-
+ps = np.linspace(0.001, 0.005, num=5) # ? Para empezar debemos probar solo con 0.001
+print("Physical error rates to simulate:", ps)
 
 # * DICTIONARIES FOR RESULTS
 # Logical error rates for decoders
@@ -97,6 +97,8 @@ for index, p in enumerate(ps):
     
     dem = circuit.detector_error_model()
 
+
+    # ! ¿Interesa hacer esta parte?
     # Proofs adapting the STIM to BP using as reference
     # https://github.com/oscarhiggott/stimbposd/blob/main/src/stimbposd/bp_osd.py 
     hx_shape = code.hx.shape  # Shape of the X parity matrix
