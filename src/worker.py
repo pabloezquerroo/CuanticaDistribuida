@@ -17,27 +17,26 @@ from IBM_STIM import create_bivariate_bicycle_codes, build_circuit, select_confi
 """ 
 ! Flujo de trabajo
 
-El orquerstador lee los argumentos de las colas SQS e invoca al worker pasando la información mediante eventos.
+El orquerstador lee los argumentos de las cola SQS e invoca al worker pasando la información mediante eventos.
 El worker lee la información del evento e inicia su ejecucion.
 
 Informacion dentro del evento:
     - codeConfig: Código a probar
     - p: tasa de error física a simular 
     - NMCs_range: rango de Monte Carlo trials de este worker
-    - BP_arguments: argumentos para el decodificador BP
-    - BPLSD_arguments: argumentos para el decodificador BPLSD
-    - BPOSD_arguments: argumentos para el decodificador BPOSD
-
-    ? Probablemente haga falta recibir un id_args para identificar el conjunto de argumentos y juntar los lotes posteriormente.
+    - decoder_type: tipo de decodificador (BP, BPLSD, BPOSD)
+    - arguments: argumentos para el decodificador BP
+    ! - ID: Identificador de argumentos, codeConfig y p que se usará para juntar los lotes posteriormente.
+    Se genera en args_mixer.py y se añade a la cola SQS junto con los argumentos. En orchestrator.py se concatena con codeConfig y p y eso forma el ID que se recibe en el worker.
 
     ? EJEMPLO de evento
     event = {
         "codeConfig": "72",
         "p": 0.001,
         "NMCs_range": 500,
-        "BP_arguments":  {"bp_method":"product_sum", "error_channel":"dem_error_channel"},
-        "BPLSD_arguments": {"bp_method":"product_sum", "osd_method":"lsd_cs", "osd_order":2},
-        "BPOSD_arguments": {"bp_method":"product_sum", "schedule":"parallel", "osd_method":"osd_0"}
+        "decoder_type": "BPOSD",
+        "arguments": { "max_iter"=100, "bp_method":"product_sum", "schedule":"parallel", "osd_method":"osd_0"}
+        "ID": 123456789_72_001 
     }
 """
 
@@ -53,9 +52,8 @@ def lambda_handler(event, context=None):
     codeConfig = event["codeConfig"]
     p = event["p"]
     NMCs_range = event["NMCs_range"]
-    BP_arguments = event.get("BP_arguments", {})
-    BPLSD_arguments = event.get("BPLSD_arguments", {})
-    BPOSD_arguments = event.get("BPOSD_arguments", {})
+    decoder_type = event["decoder_type"]
+    arguments = event["arguments"]
 
     # * Build quantum code
     # Parameters for simulation
@@ -78,89 +76,98 @@ def lambda_handler(event, context=None):
     matrices = detector_error_model_to_check_matrices(dem, allow_undecomposed_hyperedges=True)
     pcm = matrices.check_matrix                     # Parity check matrix
     observable_mat = matrices.observables_matrix    # Logical observables matrix
-
-    if BP_arguments.get("error_channel") == "dem_error_channel":
-        BP_arguments["error_channel"] = matrices.priors     # Prior error probabilities for each channel 
+    if arguments.get("error_channel") == "dem_error_channel":
+        arguments["error_channel"] = matrices.priors     # Prior error probabilities for each channel 
 
     # * Initialize decoders
-    _bp = BpDecoder(pcm, max_iter=100, error_rate=float(p), **event["BP_arguments"])
-    _bplsd = BpLsdDecoder(pcm, max_iter=100, error_rate=float(p), **event["BPLSD_arguments"])
-    _bposd = BpOsdDecoder(pcm, max_iter=100, error_rate=float(p), **event["BPOSD_arguments"])
+    if decoder_type == "BP":
+        _decoder = BpDecoder(pcm, error_rate=float(p), **event["arguments"])
+    elif decoder_type == "BPLSD":
+        _decoder = BpLsdDecoder(pcm, error_rate=float(p), **event["arguments"])
+    elif decoder_type == "BPOSD":
+        _decoder = BpOsdDecoder(pcm, error_rate=float(p), **event["arguments"])
+    else:
+        raise ValueError(f"Decoder type {decoder_type} not supported")
 
-    # * Initialize variables for results
-    PlBP = PlBPLSD = PlBPOSD = 0
-    time_av_BP = time_av_BPLSD = time_av_BPOSD = 0
-    time_max_BP = time_max_BPLSD = time_max_BPOSD = 0
-
+    # * Initialize results
+    Pl = 0
+    time_av = 0
+    time_max = 0
     
+    # * Run Monte Carlo trials
     for _ in range(NMCs_range):
         # ! ¿Es necesario compilar el circuito cada iteración?
         sampler = circuit.compile_detector_sampler()
         detectors, observables = sampler.sample(1, separate_observables=True)
-
-        # BP
+        
         a = time.time()
-        predicted_observables = _bp.decode(detectors[0])
+        predicted_observables = _decoder.decode(detectors[0])
         b = time.time()
-        time_av_BP += (b - a) / NMCs_range
+        time_av += (b - a) / NMCs_range
 
-        # BPLSD
-        a = time.time()
-        predicted_observables_lsd = _bplsd.decode(detectors[0])
-        b = time.time()
-        time_av_BPLSD += (b - a) / NMCs_range
+        time_max = max(time_max, (b - a))
 
-        # BPOSD
-        a = time.time()
-        predicted_observables_osd = _bposd.decode(detectors[0])
-        b = time.time()
-        time_av_BPOSD += (b - a) / NMCs_range
+        logical_error = (observable_mat @ predicted_observables + observables) % 2
 
-        # Logical error
-        logical_error_bp = (observable_mat @ predicted_observables + observables) % 2
-        logical_error_lsd = (observable_mat @ predicted_observables_lsd + observables) % 2
-        logical_error_osd = (observable_mat @ predicted_observables_osd + observables) % 2
+        if np.any(logical_error):
+            Pl += 1 / NMCs_range
 
-        if np.any(logical_error_bp): PlBP += 1 / NMCs_range
-        if np.any(logical_error_lsd): PlBPLSD += 1 / NMCs_range
-        if np.any(logical_error_osd): PlBPOSD += 1 / NMCs_range
-
+    # * Print results
     if show_times:
         print("Execution time:", time.time() - time_start)
-    
-    # TODO: "id_args": id_args -> recibido desde el orquestador para identificar el conjunto de argumentos y juntar los lotes posteriormente.
+
+    # * Save results
     results = {
         "codeConfig": codeConfig,
         "p": p,
-        "BP_arguments": BP_arguments,
-        "BPLSD_arguments": BPLSD_arguments,
-        "BPOSD_arguments": BPOSD_arguments,
-        "PlBP": PlBP,
-        "PlBPLSD": PlBPLSD,
-        "PlBPOSD": PlBPOSD,
-        "time_av_BP": time_av_BP,
-        "time_max_BP": time_max_BP,
-        "time_av_BPLSD": time_av_BPLSD,
-        "time_max_BPLSD": time_max_BPLSD,
-        "time_av_BPOSD": time_av_BPOSD,
-        "time_max_BPOSD": time_max_BPOSD
+        "NMCs_range": NMCs_range,
+        "decoder_type": decoder_type,
+        "arguments": arguments,
+        f"Pl{decoder_type}": Pl,
+        f"time_av_{decoder_type}": time_av,
+        f"time_max_{decoder_type}": time_max
     }
 
-    print("Results:")
     for k, v in results.items():
         print(f"{k}: {v}")
+    print("--------------------------------")
+    # * Save results to DynamoDB
 
     # TODO: Guardar los resultados en una dynamoDB
 
 
 if __name__ == "__main__":
-    # For local testing
+    # * For local testing
+    
+    # BP
+    # ? BpDecoder(pcm, max_iter=100, error_rate=float(p), bp_method="product_sum", error_channel=dem_error_channel)
     lambda_handler({
         "codeConfig": "72",
         "p": 0.001,
         "NMCs_range": 500,
-        "BP_arguments": {"bp_method": "product_sum", "error_channel": "dem_error_channel"},
-        "BPLSD_arguments": {"bp_method": "product_sum", "osd_method": "lsd_cs", "osd_order": 2},
-        "BPOSD_arguments": {"bp_method": "product_sum", "schedule": "parallel", "osd_method": "osd_0"}
+        "": 10**6,
+        "decoder_type": "BP",
+        "arguments": { "max_iter":100, "bp_method":"product_sum", "error_channel":"dem_error_channel"}
     })
-    
+
+    # BPLSD
+    # ? BpLsdDecoder(pcm, max_iter=100, error_rate=float(p), bp_method="product_sum", osd_method = 'lsd_cs', osd_order = 2)
+    lambda_handler({
+        "codeConfig": "72",
+        "p": 0.001,
+        "NMCs_range": 500,
+        "": 10**6,
+        "decoder_type": "BPLSD",
+        "arguments": { "max_iter":100, "bp_method":"product_sum", "osd_method":"lsd_cs", "osd_order":2}
+    })
+
+    # BPOSD
+    # ? BpOsdDecoder(pcm, max_iter=100, error_rate=float(p), bp_method="product_sum", schedule = 'parallel', osd_method="osd_0")
+    lambda_handler({
+        "codeConfig": "72",
+        "p": 0.001,
+        "NMCs_range": 500,
+        "": 10**6,
+        "decoder_type": "BPOSD",
+        "arguments": { "max_iter":100, "bp_method":"product_sum", "schedule":"parallel", "osd_method":"osd_0"}
+    })
