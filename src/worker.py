@@ -26,18 +26,8 @@ Informacion dentro del evento:
     - NMCs_batch: rango de Monte Carlo trials de este worker
     - decoder_type: tipo de decodificador (BP, BPLSD, BPOSD)
     - arguments: argumentos para el decodificador BP
-    TODO: - ID: Identificador de argumentos, codeConfig, p y numero de lote que se usará para juntarlos posteriormente.
-    Se genera en args_mixer.py y se añade a la cola SQS junto con los argumentos. En orchestrator.py se concatena con codeConfig y p y eso forma el ID que se recibe en el worker.
+    - id_batch: Identificador de argumentos, codeConfig y p, para unir los resultados de los batches de un mismo intenro de Monte Carlo.
 
-    ? EJEMPLO de evento
-    event = {
-        "codeConfig": "72",
-        "p": 0.001,
-        "NMCs_batch": 500,
-        "decoder_type": "BPOSD",
-        "arguments": { "max_iter":100, "bp_method":"product_sum", "schedule":"parallel", "osd_method":"osd_0"}
-        "ID": 123456789_72_001 
-    }
 """
 
 def lambda_handler(event, context=None):
@@ -96,8 +86,7 @@ def lambda_handler(event, context=None):
     
     # * Run Monte Carlo trials
     for _ in range(NMCs_batch):
-        # ! ¿Es necesario compilar el circuito cada iteración?
-        sampler = circuit.compile_detector_sampler()
+        sampler = circuit.compile_detector_sampler() # ! ¿Es necesario compilar el circuito cada iteración?
         detectors, observables = sampler.sample(1, separate_observables=True)
         
         a = time.time()
@@ -118,6 +107,7 @@ def lambda_handler(event, context=None):
 
     # * Results
     results = {
+        "id_batch": event["id_batch"],
         "codeConfig": codeConfig,
         "p": p,
         "NMCs_batch": NMCs_batch,
@@ -128,15 +118,13 @@ def lambda_handler(event, context=None):
         f"time_max_{decoder_type}": time_max
     }
 
-    # TODO: Guardar los resultados en una dynamoDB
+    # TODO: Guardar los resultados en una BD
 
 
     for k, v in results.items():
         print(f"{k}: {v}")
     print("--------------------------------")
     
-
-
 
 if __name__ == "__main__":
     # * For local testing
@@ -148,7 +136,8 @@ if __name__ == "__main__":
         "p": 0.001,
         "NMCs_batch": 500,
         "decoder_type": "BP",
-        "arguments": { "max_iter":100, "bp_method":"product_sum", "error_channel":"dem_error_channel"}
+        "arguments": { "max_iter":100, "bp_method":"product_sum", "error_channel":"dem_error_channel"},
+        "id_batch": "0123456789_72_001"
     })
 
     # BPLSD
@@ -158,7 +147,8 @@ if __name__ == "__main__":
         "p": 0.001,
         "NMCs_batch": 500,
         "decoder_type": "BPLSD",
-        "arguments": { "max_iter":100, "bp_method":"product_sum", "osd_method":"lsd_cs", "osd_order":2}
+        "arguments": { "max_iter":100, "bp_method":"product_sum", "osd_method":"lsd_cs", "osd_order":2},
+        "id_batch": "1123456789_72_001"
     })
 
     # BPOSD
@@ -168,5 +158,6 @@ if __name__ == "__main__":
         "p": 0.001,
         "NMCs_batch": 500,
         "decoder_type": "BPOSD",
-        "arguments": { "max_iter":100, "bp_method":"product_sum", "schedule":"parallel", "osd_method":"osd_0"}
+        "arguments": { "max_iter":100, "bp_method":"product_sum", "schedule":"parallel", "osd_method":"osd_0"},
+        "id_batch": "2123456789_72_001"
     })
