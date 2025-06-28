@@ -13,7 +13,7 @@ def get_config_from_s3(bucket_name, file_key):
     config = {
         "codeConfig": [72, 90],  # Posibles codigos: 72, 90, 108, 144, 288, 784
         "p": [0.001, 0.002],  # Posibles tasas de error fisicas: 0.001, 0.002, 0.003, 0.004, 0.005
-        "NMCs": [10, 10],
+        "NMCs": [10**3, 10**3],
         "NMCs_batch": 10,  # Numero de iteraciones por lote
     }
     return config
@@ -44,7 +44,7 @@ def main():
 
     
     # Crear el directorio para los resultados si no existe
-    results_dir = "samplers_dir"
+    results_dir = "sample_outputs"
     if not os.path.exists(results_dir):
         os.makedirs(results_dir)
         print(f"Directorio '{results_dir}' creado.")
@@ -67,6 +67,8 @@ def main():
 
             # 2. Construir el circuito y el modelo de error del detector
             circuit = build_circuit(code, A_list, B_list, p=p_val, num_repeat=d, z_basis=False, use_both=False)
+            all_detectors = []
+            all_observables = []
             
             for i in range(config_data["NMCs"][p_val_index]):
                 print(f"Realizando simulación {i+1} de {config_data["NMCs"][p_val_index]}...")
@@ -76,18 +78,23 @@ def main():
                 # 4. Obtener una muestra
                 # El primer argumento de sample() es el número de "shots"
                 detectors, observables = sampler.sample(1, separate_observables=True)
-                print("Detectors:", detectors[0])
-                print("Observables:", observables[0])
 
-                # Guardar las muestras
-                p_str = f"{p_val}".replace(".", "comma")
-                detector_filename = os.path.join(results_dir, f"detectors_{code_config_val}_{p_str}_{i}.npy")   
-                observable_filename = os.path.join(results_dir, f"observables_{code_config_val}_{p_str}_{i}.npy")
-                
-                np.save(detector_filename, detectors[0])
-                np.save(observable_filename, observables[0])
+                all_detectors.append(detectors[0].tolist()) # Convertir a lista
+                all_observables.append(observables[0].tolist()) # Convertir a lista
 
-        print(f"{config_data['NMCs'][p_val_index]} muestras guardadas para codeConfig={code_config_val}, p={p_str} en '{results_dir}'\n")
+            # Crear diccionario con los resultados
+            results_for_config = {
+                "detectors": all_detectors,
+                "observables": all_observables
+            }
+
+           # Guardar el diccionario en un archivo JSON
+            p_str = f"{p_val}".replace(".", "comma")
+            results_filename = os.path.join(results_dir, f"results_{code_config_val}_{p_str}.json")
+            with open(results_filename, 'w') as f:
+                json.dump(results_for_config, f, indent=4)
+
+            print(f"Resultados para codeConfig={code_config_val}, p={p_val} guardados en '{results_filename}'\n")
 
 if __name__ == "__main__":
     main()
