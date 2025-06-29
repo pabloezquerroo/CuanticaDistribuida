@@ -35,7 +35,7 @@ show_times = True
 
 # * PARAMETERS FOR SIMULATION
 # Codes to test
-codesConfig = ["72", "90", "108", "144", "288", "784"]
+codesConfig = [72, 90, 108, 144, 288, 784]
 codeConfig = codesConfig[0]  # Select one of the codes to test
 
 # Number of Monte Carlo trials per physical error rate
@@ -156,7 +156,7 @@ for index, p in enumerate(ps):
             print("observables:\n")
             print(observables)
 
-        if show_times:
+        if show_times and iteration % 1000 == 0:
             time_detectors_observables = time.time() - time_start
             print("Time to sample detectors and observables:", time_detectors_observables)
             
@@ -164,9 +164,9 @@ for index, p in enumerate(ps):
         a = time.time()  
         predicted_observables = _bp.decode(detectors[0])
 
-        if show_times:
+        if show_times and iteration % 1000 == 0:
             time_bp_decoding = time.time() - time_start
-            print("Time for BP decoding:", time_bp_decoding)
+            print("Time for BP decoding (iteration % 1000 == 0):", time_bp_decoding)
 
         #soft_decisions = _bp.bp_decoding
         #convergence = _bp.converge
@@ -192,9 +192,9 @@ for index, p in enumerate(ps):
         a = time.time()
         predicted_observables_lsd = _bplsd.decode(detectors[0])
 
-        if show_times:
+        if show_times and iteration % 1000 == 0:
             time_bplsd_decoding = time.time() - time_start
-            print("Time for BPLSD decoding:", time_bplsd_decoding)
+            print("Time for BPLSD decoding (iteration % 1000 == 0):", time_bplsd_decoding)
 
         b = time.time()
         time_av_BPLSD += (b - a) / NMCs[index]
@@ -215,9 +215,9 @@ for index, p in enumerate(ps):
         a = time.time()
         predicted_observables_osd = _bposd.decode(detectors[0])
 
-        if show_times:
+        if show_times and iteration % 1000 == 0:
             time_bposd_decoding = time.time() - time_start
-            print("Time for BPOSD decoding:", time_bposd_decoding)
+            print("Time for BPOSD decoding (iteration % 1000 == 0):", time_bposd_decoding)
 
         b = time.time()
         time_av_BPOSD += (b - a) / NMCs[index]
