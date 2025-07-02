@@ -3,25 +3,31 @@ import json
 import os
 import dotenv
 import logging
+
+import sys
+from pathlib import Path
+src_path = Path(__file__).parent.parent / "src"
+sys.path.append(str(src_path))
+
 from IBM_STIM import select_configuration, create_bivariate_bicycle_codes, build_circuit
+
+logging.basicConfig(level=logging.INFO)
 
 # Load environment variables from .env
 dotenv.load_dotenv()
-
-logging.basicConfig(level=logging.INFO)
 
 def get_connection_s3():
     return boto3.client(
         's3',
         endpoint_url=os.getenv('S3_ENDPOINT_URL'),
-        aws_access_key_id=os.getenv('S3_KEY_ID'),
-        aws_secret_access_key=os.getenv('S3_APPLICATION_KEY')
+        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
     )
 
 def get_config_from_s3():
     try:
         s3 = get_connection_s3()
-        response = s3.get_object(Bucket=os.getenv('S3_BUCKET_NAME'), Key=os.getenv('CONFIG_FILE_PATH'))
+        response = s3.get_object(Bucket=os.getenv('S3_BUCKET_NAME'), Key=f"{os.getenv('CONFIG_FILE_PATH')}")
         dict_config = json.loads(response['Body'].read().decode('utf-8'))
         logging.info("Configuration loaded from S3.")
         return dict_config
@@ -77,27 +83,32 @@ def main():
             # Initialize lists for storing results
             all_detectors = []
             all_observables = []
+
+            total_nmcs = config_data["NMCs"][p_val_index]
+            size_batch = config_data["NMCs_batch"]
             
-            for i in range(config_data["NMCs"][p_val_index]):
-                logging.info(f"Simulating {i+1} of {config_data['NMCs'][p_val_index]}...")
+            for i in range(1, total_nmcs + 1):
+                logging.info(f"Simulating {i} of {total_nmcs}...")
                 sampler = circuit.compile_detector_sampler()
-                detectors, observables = sampler.sample(1, separate_observables=True)
-                
+                detectors, observables = sampler.sample(1, separate_observables=True)                    
                 all_detectors.append(detectors[0].tolist())
                 all_observables.append(observables[0].tolist())
-
-            results_for_config = {
-                "detectors": all_detectors,
-                "observables": all_observables
-            }
-
-            p_str = f"{p_val:.3f}".replace(".", "_")
-            s3_key = os.path.join(os.getenv('DETECTORS_OBSERVABLES_PATH'), f"results_{code_config_val}_p{p_str}.json")
-
-            upload_to_s3(results_for_config, s3_key)
-
+                if i % size_batch == 0:
+                    batch_counter = i // size_batch
+                    logging.info(f"Saving batch {batch_counter}...")
+                    results_for_batch = {
+                        "detectors": all_detectors,
+                        "observables": all_observables
+                    }
+                    p_str = f"{p_val}".replace(".", "_")
+                    s3_key = os.path.join(f"{os.getenv('DETECTORS_OBSERVABLES_PATH')}", f"code{code_config_val}_p{p_str}/batch_{batch_counter}.json")
+                    upload_to_s3(results_for_batch, s3_key)
+                    logging.info(f"Batch {batch_counter} results saved to S3 at {s3_key}")
+                    all_detectors = []
+                    all_observables = []
+                        
             logging.info(f"Results for codeConfig={code_config_val}, p={p_val} saved to S3")
             
-
 if __name__ == "__main__":
     main()
+
