@@ -8,12 +8,10 @@
 .env
 .venv
 
-# Python cache
+# Python
 __pycache__/
 *.pyc
-
-# Entorno local de Python
 .python-version
 
-# Directorio de resultados
-sample_outputs
+# Local testing
+dynamodb_data
