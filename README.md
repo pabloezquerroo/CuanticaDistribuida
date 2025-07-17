@@ -6,39 +6,17 @@ Repositorio de Trabajo de Fin de Máster sobre corrección de errores cuánticos
 
 ## Índice
 
-- [Configuración de entorno](#configuración-de-entorno)
 - [Documentación y Recursos](#documentación-y-recursos)
-- [Estructura del Código](#estructura-del-código)
-
----
-
-## Configuración de entorno
-
-1. **Instala [uv](https://docs.astral.sh/uv/):**
-
-Con script:
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-O con Homebrew (MacOS):
-```bash
-brew install uv
-```
-
-2. **Instala las dependencias del proyecto:**
-```bash
-uv sync
-```
-
-Esto instalará todas las dependencias definidas en `pyproject.toml` y `uv.lock`.
+- [Código de referencia el cual se busca hacer distribuido](#código-de-referencia-el-cual-se-busca-hacer-distribuido)
+- [Arquitectura Distribuida](#arquitectura-distribuida)
+- [Ejecución y pruebas](#ejecución-y-pruebas)
 
 ---
 
 ## Documentación y Recursos
 
 - **Introducción a QEC:**  
-  https://arxiv.org/abs/2304.08678
+  - https://arxiv.org/abs/2304.08678
 
 - **Artículos recientes sobre decodificadores modernos:**  
   - https://arxiv.org/abs/2502.16408  
@@ -54,15 +32,13 @@ Esto instalará todas las dependencias definidas en `pyproject.toml` y `uv.lock`
 
 ---
 
-## Estructura del Código
+## Código de referencia el cual se busca distribuir
 
 - **test_v2.py**  
   Script para pruebas locales con la versión 2 de la librería QEC.
 - **IBM_STIM.py, dem_to_matrices.py, utils.py**  
   Utilidades para generación de ruido, construcción de circuitos cuánticos.  
   *No necesarios para la decodificación.*
-
----
 
 ### Sobre el código
 
@@ -109,3 +85,94 @@ convergence = _bp.converge
 iteration_stop = _bp.iter
 soft_decisions_llr = _bp.log_prob_ratios
 ```
+
+---
+
+## Arquitectura Distribuida
+
+La arquitectura del proyecto está diseñada para ejecutar simulaciones de corrección de errores cuánticos de forma masivamente paralela, utilizando un sistema de Lambdas y servicios de AWS. El diseño se basa en un fan-out de dos niveles para distribuir la carga de trabajo: el **orquestador** genera los datos de simulación, un **dispatcher (`nmc_worker`)** distribuye las tareas, y múltiples **workers (`args_worker`)** ejecutan los cálculos finales.
+
+Los componentes se comunican de forma asíncrona a través de S3 para el almacenamiento de datos de las simulaciones y DynamoDB para el almacenamiento de los argumentos, la coordinación y el estado.
+
+### Componentes del Sistema
+
+-   **`args_mixer.py` (Lambda 1)**
+    -   **Disparador**: Subida de un archivo `config.json` a un bucket de S3.
+    -   **Función**: Lee la configuración, genera todas las combinaciones de parámetros de simulación y las agrupa en lotes. Cada lote se guarda como un ítem en la tabla `args_dynamodb`.
+    -   **Salida**: Invoca al `orchestrator.py`.
+
+-   **`orchestrator.py` (Lambda 2)**
+    -   **Función**: Prepara los datos para la simulación. Genera los arrays de detectores y observables en lotes de tamaño `NMC_batch_size`.
+    -   Por cada lote de datos, realiza dos acciones:
+        1.  Guarda los arrays en un archivo JSON en S3.
+        2.  Crea una entrada en la tabla `samples_dynamodb` con el ID del lote (`id_nmc_batch`), la ruta al JSON en S3 (`s3_data_path`) y un contador (`workers_completed`).
+    -   **Salida**: Invoca a `nmc_worker.py` por cada lote de datos generado.
+
+-   **`nmc_worker.py` (Lambda 3)**
+    -   **Función**: Actúa como un dispatcher de segundo nivel. Su objetivo es distribuir las combinaciones de argumentos contra un lote de datos de simulación.
+    -   Recibe un `id_nmc_batch`.
+    -   Invoca una instancia de `args_worker.py` por cada lote de argumentos que deba procesarse, pasando el `id_nmc_batch` y el `id_batch_arguments` correspondiente.
+
+-   **`args_worker.py` (Lambda 4)**
+    -   **Función**: Es el worker principal que ejecuta la simulación.
+    -   Recibe `id_nmc_batch` y `id_batch_arguments`.
+    -   Lee los datos de simulación (detectores/observables) desde S3 (usando la ruta de `samples_dynamodb`) y el lote de argumentos desde `args_dynamodb`.
+    -   Ejecuta el cálculo de QEC para cada argumento del lote.
+    -   Guarda el resultado final en una base de datos de resultados (DB).
+    -   **Coordina la limpieza**: Incrementa el contador `workers_completed` en `samples_dynamodb`. Si es el último worker para ese `id_nmc_batch`, borra el archivo de datos temporales de S3 y la entrada correspondiente en `samples_dynamodb`.
+
+-   **Servicios de AWS**
+    -   **S3**: Almacena el `config.json` inicial y los datos temporales de simulación (detectores/observables).
+    -   **DynamoDB (`args_dynamodb`)**: Tabla de parámetros. Almacena los lotes de combinaciones de argumentos.
+    -   **DynamoDB (`samples_dynamodb`)**: Tabla de estado. Rastrea los lotes de datos de simulación y cuántos workers han terminado.
+    -   **DB de Resultados**: Base de datos final para almacenar los resultados de las simulaciones.
+
+### Flujo de Ejecución
+
+1.  **Inicio**: Un usuario sube el archivo `config.json` a S3, lo que dispara `args_mixer`.
+2.  **`args_mixer`**: Genera las combinaciones de argumentos y las guarda en `args_dynamodb`. Invoca al `orchestrator`.
+3.  **`orchestrator`**: Genera un lote de datos de simulación (ej. 1000 NMCs), lo guarda en S3 y crea una entrada de seguimiento en `samples_dynamodb`. Invoca a `nmc_worker` con el ID del lote de datos (`id_nmc_batch`).
+4.  **`nmc_worker`**: Recibe el `id_nmc_batch`. Invoca a N instancias de `args_worker`, una por cada lote de argumentos (`id_batch_arguments`) que se debe probar contra ese lote de datos.
+5.  **`args_worker`**: Cada instancia lee sus argumentos (`args_dynamodb`) y los datos de simulación (S3), ejecuta los cálculos y guarda el resultado en la BD final.
+6.  **Limpieza**: El último `args_worker` de un lote de datos limpia los datos temporales de S3 y `samples_dynamodb`.
+7.  El proceso se repite desde el paso 3 para todos los lotes de datos que el orquestador necesite generar.
+
+---
+
+## Ejecución y pruebas
+
+### Local
+Para probar el sistema en un entorno local, se utiliza Docker para simular los servicios de AWS.
+
+1.  **Instala gestor de paquetes y entornos virtuales [uv](https://docs.astral.sh/uv/):**
+    -   Instala con script:
+    ```bash
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
+    -   Instala con Homebrew (MacOS):
+    ```bash
+    brew install uv
+    ```
+
+2.  **Instala las dependencias del proyecto:**
+    -   Instala las dependencias definidas en `pyproject.toml` y `uv.lock`.
+    ```bash
+    uv sync
+    ```
+
+3.  **Configuración del Entorno:**
+    -   Crea un archivo `.env` en la raíz del proyecto con las variables de entorno necesarias para conectar con S3 y la DynamoDB local. Consulta el archivo `.env.example` para ver las variables requeridas.
+
+4.  **Iniciar Servicios:**
+    -   Usa el archivo `resources/docker-compose.yaml` para levantar un contenedor con DynamoDB local.
+    ```bash
+    cd resources
+    docker-compose up
+    ```
+
+5.  **Ejecutar los Scripts:**
+    -   Ejecuta los scripts en el orden correcto, empezando por `args_mixer.py`.
+    ```bash
+    python src/args_mixer.py
+    ```
+---

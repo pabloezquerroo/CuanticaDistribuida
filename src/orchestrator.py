@@ -10,6 +10,9 @@ Lambda que realiza las siguientes funciones:
 """
 
 import boto3
+from botocore.exceptions import ClientError
+import math
+
 import os
 import json
 from IBM_STIM import create_bivariate_bicycle_codes, build_circuit, select_configuration
@@ -64,9 +67,9 @@ def get_config_from_s3(bucket_name, config_file_path):
         dict_config = json.loads(response['Body'].read().decode('utf-8'))
         logging.info("Configuration loaded from S3.")
         return dict_config
-    except Exception as e:
+    except ClientError as e:
         logging.error(f"Error loading configuration from S3: {e}")
-        return None
+        raise RuntimeError("Error loading configuration from S3") from e
 
 def upload_samples_to_s3(batch_data, s3_path):
     """Upload a batch of samples to an S3 bucket.
@@ -87,59 +90,66 @@ def upload_samples_to_s3(batch_data, s3_path):
             ContentType='application/json'
         )
         logging.info("Data uploaded to S3.")
-    except Exception as e:
+    except ClientError as e:
         logging.error(f"Error uploading data to S3: {e}")
+        raise RuntimeError("Error uploading data to S3") from e
 #endregion
 
 #region DynamoDB Functions
 def get_connection_dynamodb():
-    """Create and return a Boto3 DynamoDB resource.
-
-    The configuration is loaded from environment variables.
-    The endpoint_url is particularly important for local development.
-
-    Returns:
-        boto3.resource: A DynamoDB resource object.
-    """
     return boto3.resource(
         'dynamodb',
-        region_name=os.getenv('AWS_DEFAULT_REGION'),  # obligatoria aunque no se use realmente
-        endpoint_url=os.getenv('DYNAMODB_ENDPOINT_URL')  # importante para local
+        region_name=os.getenv('AWS_DEFAULT_REGION'),
+        endpoint_url=os.getenv('DYNAMODB_ENDPOINT_URL'),
+        aws_access_key_id='dummy',
+        aws_secret_access_key='dummy'
     )
 
-def create_table_if_not_exists(table_name):
-    """Create a DynamoDB table if it does not exist.
-
-    Args:
-        table_name (str): The name of the table to create.
+def create_table_samples_dynamodb_if_not_exists():
+    """Create a DynamoDB table samples_dynamodb if it does not exist.
 
     Returns:
-        None
+        table: The created table.
     """
+    table_name = os.getenv('DYNAMODB_SAMPLES_TABLE_NAME')
+    try:
+        dynamodb = get_connection_dynamodb()
+    except ClientError as e:
+        logging.error(f"Error connecting to DynamoDB: {e}")
+        raise RuntimeError("Error connecting to DynamoDB") from e
+
     try:
         logging.info(f"Checking if table '{table_name}' exists...")
-        dynamodb = get_connection_dynamodb()
         table = dynamodb.Table(table_name)
         table.load()
         logging.info(f"Table '{table_name}' already exists.")
-    except dynamodb.meta.client.exceptions.ResourceNotFoundException:
-        logging.info(f"Table '{table_name}' does not exist. Creating...")
-        table = dynamodb.create_table(
-            TableName=table_name,
-            KeySchema=[
-                {'AttributeName': 'id_nmc_batch', 'KeyType': 'HASH'}
-            ],
-            AttributeDefinitions=[
-                {'AttributeName': 'id_nmc_batch', 'AttributeType': 'S'}
-            ],
-            ProvisionedThroughput={
-                'ReadCapacityUnits': 5,
-                'WriteCapacityUnits': 5
-            }
-        )
-        table.wait_until_exists()
-        logging.info(f"Table '{table_name}' created successfully.")
-    return table
+        return table
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ResourceNotFoundException':
+            logging.warning(f"Table '{table_name}' does not exist. Creating...")
+            try:
+                table = dynamodb.create_table(
+                    TableName=table_name,
+                    KeySchema=[
+                        {'AttributeName': 'id_nmc_batch', 'KeyType': 'HASH'}
+                    ],
+                    AttributeDefinitions=[
+                        {'AttributeName': 'id_nmc_batch', 'AttributeType': 'S'}
+                    ],
+                    ProvisionedThroughput={
+                        'ReadCapacityUnits': 5,
+                        'WriteCapacityUnits': 5
+                    }
+                )
+                table.wait_until_exists()
+                logging.info(f"Table '{table_name}' created successfully.")
+                return table
+            except ClientError as e2:
+                logging.error(f"Error creating table '{table_name}': {e2}")
+                raise RuntimeError("Error creating table") from e2
+        else:
+            logging.error(f"Unexpected error when checking table '{table_name}': {e}")
+            raise RuntimeError("Error checking table existence") from e
 
 def upload_samples_info_to_dynamodb(id_nmc_batch, s3_path):
     """Upload information for accessing a batch of NMC samples to DynamoDB.
@@ -152,18 +162,17 @@ def upload_samples_info_to_dynamodb(id_nmc_batch, s3_path):
         None
     """
     try:
-        table = create_table_if_not_exists(os.getenv('DYNAMODB_SAMPLES_TABLE_NAME'))
-
-        table.put_item(
-            Item={
-                'id_nmc_batch': id_nmc_batch,
-                's3_data_path': s3_path,
-                'workers_completed': 0,
-            }
-        )
+        table = create_table_samples_dynamodb_if_not_exists()
+        item = {
+            'id_nmc_batch': id_nmc_batch,
+            's3_data_path': s3_path,
+            'workers_completed': 0,
+        }
+        table.put_item(Item=item)
         logging.info("Data uploaded to DynamoDB.")
-    except Exception as e:
+    except ClientError as e:
         logging.error(f"Error uploading data to DynamoDB: {e}")
+        raise RuntimeError("Error uploading data to DynamoDB") from e
 #endregion
 
 def lambda_handler(event, context):
@@ -234,11 +243,18 @@ def lambda_handler(event, context):
                     upload_samples_info_to_dynamodb(id_nmc_batch, s3_path)
 
                     # TODO: Invocar a la lambda nmc_worker con el id_nmc_batch y number_of_args_combinations_batches
-
+                    logging.info(f"Invoking nmc_worker with id_nmc_batch={id_nmc_batch} and number_of_args_combinations_batches={number_of_args_combinations_batches}")
+                
                     batch_detectors = []
                     batch_observables = []
     return {"status": "ok"}
 
-# Simular lambda con payload args_size = 100
 if __name__ == "__main__":
-    lambda_handler({"args_size": args_size}, None)
+    number_of_args_combinations_batches = 1 # ! Para pruebas sin eventos
+    try:
+        logging.info(f"Executing orchestrator.py locally...")
+        lambda_handler({"number_of_args_combinations_batches": number_of_args_combinations_batches}, None)
+        logging.info("Local execution finished.")
+    except Exception as e:
+        logging.error(f"Error in orchestrator.py: {e}")
+        raise RuntimeError("Error in orchestrator.py") from e
