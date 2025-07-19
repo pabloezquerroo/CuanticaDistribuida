@@ -95,13 +95,13 @@ def get_connection_dynamodb():
         aws_secret_access_key='dummy'
     )
 
-def create_table_args_dynamodb_if_not_exists():
+def create_table_args_dynamodb_if_not_exists(table_name):
     """Create a DynamoDB table args_dynamodb if it does not exist.
-
+    Args:
+        table_name (str): The name of the DynamoDB table to create.
     Returns:
         table: The created table.
     """
-    table_name = os.getenv('DYNAMODB_ARGS_TABLE_NAME')
 
     try:
         dynamodb = get_connection_dynamodb()
@@ -117,7 +117,7 @@ def create_table_args_dynamodb_if_not_exists():
         return table
     except ClientError as e:
         if e.response['Error']['Code'] == 'ResourceNotFoundException':
-            logging.warning(f"Table '{table_name}' does not exist. Creating...")
+            logging.info(f"Table '{table_name}' does not exist. Creating...")
             try:
                 table = dynamodb.create_table(
                     TableName=table_name,
@@ -146,48 +146,108 @@ def create_table_args_dynamodb_if_not_exists():
 
 #endregion
 
-def lambda_handler(event, context):
-    config = get_config_from_s3(os.getenv('S3_BUCKET_NAME'), os.getenv('S3_CONFIG_FILE_PATH'))  
-    args_batch_size = config['args_batch_size']
+#region Lambda Functions
+def get_connection_lambda():
+    return boto3.client('lambda',
+        region_name=os.getenv('AWS_DEFAULT_REGION'),
+        endpoint_url=os.getenv('LAMBDA_ENDPOINT_URL'),
+        aws_access_key_id='dummy',
+        aws_secret_access_key='dummy'
+    )
 
-    args_list = generate_args()
-    number_of_args_combinations_batches = math.ceil(len(args_list) / args_batch_size)
-        
-    table = create_table_args_dynamodb_if_not_exists()
+def invoke_lambda(lambda_client, payload, lambda_name):
+    """Invoke the Lambda function.
 
-    for i, args in enumerate(args_list):
-        id_batch_arguments = (i // args_batch_size)
-        try:
-            table.put_item(
-                Item={
-                    'id_batch_arguments': id_batch_arguments,
-                    'id_arguments': args['id_arguments'],
-                    'decoder_type': args['decoder_type'],
-                    'arguments': args['arguments']
-                },
-                ConditionExpression='attribute_not_exists(id_batch_arguments) AND attribute_not_exists(id_arguments)'
-            )
-            logging.info(f"Item {i} loaded to table '{os.getenv('DYNAMODB_ARGS_TABLE_NAME')}'")
-        except ClientError as e:
-            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
-                logging.error(f"Item with id_batch_arguments={id_batch_arguments} and id_arguments={args['id_arguments']} already exists. Skipping.")
-            else:
-                logging.error(f"Error loading item: {e.response['Error']['Message']}")
-                raise RuntimeError("Error loading item") from e
+    Args:
+        payload (dict): The payload to send to the Lambda function.
 
-    #TODO: Invocar a orchestrator.py con number_of_args_combinations_batches
-    logging.info(f"Arguments successfully saved to table '{os.getenv('DYNAMODB_ARGS_TABLE_NAME')}'")
-
-    return {"status": "ok"}
-
-
-if __name__ == "__main__":
-    dotenv.load_dotenv()
+    Returns:
+        dict: The response from the Lambda function.
+    """
+    logging.info(f"Invoking Lambda with payload: {payload}")
     try:
-        logging.info("Executing args_mixer.py locally...")
-        lambda_handler(None, None)
-        logging.info("Local execution finished.")
+        response = lambda_client.invoke(
+            FunctionName=lambda_name,
+            InvocationType='Event',
+            Payload=json.dumps(payload)
+        )
+        logging.info(f"Lambda invoked with response: {response}")
+        return response
+    except ClientError as e:
+        logging.error(f"Error invoking lambda: {e}")
+        raise RuntimeError("Error invoking lambda") from e
+   
+#endregion
+
+
+def lambda_handler(event, context):
+    try:
+        config = get_config_from_s3(os.getenv('S3_BUCKET_NAME'), os.getenv('S3_CONFIG_FILE_PATH')) 
+        if not config:
+            logging.error("No configuration found in S3. Exiting.")
+            return {"status": "failed"}
+        
+        args_batch_size = config['args_batch_size']
+        if args_batch_size < 1:
+            logging.error("args_batch_size must be greater than 0. Exiting.")
+            return {"status": "failed"}
+
+        lambda_client = get_connection_lambda()
+        
+        args_list = generate_args()
+        if len(args_list) < 1:
+            logging.error("No args to process. Exiting.")
+            return {"status": "failed"}
+        number_of_args_combinations_batches = math.ceil(len(args_list) / args_batch_size)
+        
+        if os.getenv('DYNAMODB_ARGS_TABLE_NAME') is None:
+            raise ValueError("DYNAMODB_ARGS_TABLE_NAME is not defined in environment variables")
+        
+        table = create_table_args_dynamodb_if_not_exists(os.getenv('DYNAMODB_ARGS_TABLE_NAME'))
+
+        for i, args in enumerate(args_list):
+            id_batch_arguments = (i // args_batch_size)
+            try:
+                table.put_item(
+                    Item={
+                        'id_batch_arguments': id_batch_arguments,
+                        'id_arguments': args['id_arguments'],
+                        'decoder_type': args['decoder_type'],
+                        'arguments': args['arguments']
+                    },
+                    ConditionExpression='attribute_not_exists(id_batch_arguments) AND attribute_not_exists(id_arguments)'
+                )
+                logging.info(f"Item {i} loaded to table '{os.getenv('DYNAMODB_ARGS_TABLE_NAME')}'")
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                    logging.error(f"Item with id_batch_arguments={id_batch_arguments} and id_arguments={args['id_arguments']} already exists. Skipping.")
+                else:
+                    logging.error(f"Error loading item: {e.response['Error']['Message']}")
+                    raise RuntimeError("Error loading item") from e
+
+        logging.info(f"Arguments successfully saved to table '{os.getenv('DYNAMODB_ARGS_TABLE_NAME')}'")
+        #! TO TEST
+        if not os.getenv('LAMBDA_ORCHESTRATOR_NAME'):
+            raise ValueError("LAMBDA_ORCHESTRATOR_NAME no está definida en las variables de entorno")
+        
+        payload = {
+            'number_of_args_combinations_batches': number_of_args_combinations_batches
+        }
+        response = invoke_lambda(lambda_client, payload, os.getenv('LAMBDA_ORCHESTRATOR_NAME'))
+        logging.info(f"Orchestrator invoked with response: {response}")
+
+        return {"status": "ok"}
     except Exception as e:
-        logging.error(f"Error in args_mixer.py: {e}")
-        raise RuntimeError("Error in args_mixer.py") from e
+        logging.error(f"Error in args_mixer lambda_handler: {e}")
+        return {"status": "failed"}
+
+# if __name__ == "__main__":
+#     dotenv.load_dotenv()
+#     try:
+#         logging.info("Executing args_mixer.py locally...")
+#         lambda_handler(None, None)
+#         logging.info("Local execution finished.")
+#     except Exception as e:
+#         logging.error(f"Error in args_mixer.py: {e}")
+#         raise RuntimeError("Error in args_mixer.py") from e
     

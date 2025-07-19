@@ -173,6 +173,6 @@ Para probar el sistema en un entorno local, se utiliza Docker para simular los s
 5.  **Ejecutar los Scripts:**
     -   Ejecuta los scripts en el orden correcto, empezando por `args_mixer.py`.
     ```bash
-    python src/args_mixer.py
+    uv run src/args_mixer.py
     ```
 ---
