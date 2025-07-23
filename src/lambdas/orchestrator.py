@@ -9,20 +9,21 @@ Lambda que realiza las siguientes funciones:
     - Se invoca un nmc_worker pasando id_nmc_batch y number_of_args_combinations_batches.
 """
 
-import boto3
-from botocore.exceptions import ClientError
-import math
-
 import os
 import json
+import boto3
+from botocore.exceptions import ClientError
+import requests
+
 from src.libs.IBM_STIM import create_bivariate_bicycle_codes, build_circuit, select_configuration
-# from IBM_STIM import create_bivariate_bicycle_codes, build_circuit, select_configuration
 
 import logging
+for handler in logging.root.handlers[:]:
+    logging.root.removeHandler(handler)
 logging.basicConfig(level=logging.INFO)
 
 import dotenv
-dotenv.load_dotenv()
+# dotenv.load_dotenv()
 
 #region S3 Functions
 def get_connection_s3():
@@ -106,20 +107,13 @@ def get_connection_dynamodb():
         aws_secret_access_key='dummy'
     )
 
-def create_table_samples_dynamodb_if_not_exists(table_name):
+def create_table_samples_dynamodb_if_not_exists(dynamodb, table_name):
     """Create a DynamoDB table samples_dynamodb if it does not exist.
     Args:
         table_name (str): The name of the DynamoDB table to create.
     Returns:
         table: The created table.
     """
-
-    try:
-        dynamodb = get_connection_dynamodb()
-    except ClientError as e:
-        logging.error(f"Error connecting to DynamoDB: {e}")
-        raise RuntimeError("Error connecting to DynamoDB") from e
-
     try:
         logging.info(f"Checking if table '{table_name}' exists...")
         table = dynamodb.Table(table_name)
@@ -167,7 +161,14 @@ def upload_samples_info_to_dynamodb(id_nmc_batch, s3_path):
         if os.getenv('DYNAMODB_SAMPLES_TABLE_NAME') is None:
             raise ValueError("DYNAMODB_SAMPLES_TABLE_NAME is not defined in environment variables")
         
-        table = create_table_samples_dynamodb_if_not_exists(os.getenv('DYNAMODB_SAMPLES_TABLE_NAME'))
+        dynamodb = get_connection_dynamodb()
+       
+        # ! SOLO PARA PRUEBAS LOCALES - Comprobación de que la tabla existe o se crea si no existe.
+        table = create_table_samples_dynamodb_if_not_exists(dynamodb, os.getenv('DYNAMODB_SAMPLES_TABLE_NAME')) 
+        
+        # ! EN PRODUCCIÓN - Se asume que la tabla ya existe.
+        # table = dynamodb.Table(os.getenv('DYNAMODB_SAMPLES_TABLE_NAME'))
+
         item = {
             'id_nmc_batch': id_nmc_batch,
             's3_data_path': s3_path,
@@ -181,41 +182,61 @@ def upload_samples_info_to_dynamodb(id_nmc_batch, s3_path):
 #endregion
 
 #region Lambda Functions
-def get_connection_lambda():
-    return boto3.client('lambda',
-        region_name=os.getenv('AWS_DEFAULT_REGION'),
-        endpoint_url=os.getenv('LAMBDA_ENDPOINT_URL'),
-        aws_access_key_id='dummy',
-        aws_secret_access_key='dummy'
-    )
+# def get_connection_lambda():
+#     return boto3.client('lambda',
+#         region_name=os.getenv('AWS_DEFAULT_REGION'),
+#         endpoint_url=os.getenv('LAMBDA_ENDPOINT_URL'),
+#         aws_access_key_id='dummy',
+#         aws_secret_access_key='dummy'
+#     )
 
-def invoke_lambda(lambda_client, payload, lambda_name):
-    """Invoke the Lambda function.
+def invoke_lambda(payload, lambda_name):
+    """
+    Invoke a Lambda function either locally or in AWS.
 
     Args:
         payload (dict): The payload to send to the Lambda function.
-
+        lambda_name (str): The name of the Lambda function to invoke.
     Returns:
         dict: The response from the Lambda function.
     """
-    logging.info(f"Invoking Lambda with payload: {payload}")
-    try:
-        response = lambda_client.invoke(
-            FunctionName=lambda_name,
-            InvocationType='Event',
-            Payload=json.dumps(payload)
-        )
-        logging.info(f"Lambda invoked with response: {response}")
-        return response
-    except ClientError as e:
-        logging.error(f"Error invoking lambda: {e}")
-        raise RuntimeError("Error invoking lambda") from e
+    is_offline = os.getenv("IS_OFFLINE", "false").lower() == "true"
+
+    if is_offline:
+        url = f"{os.getenv('LAMBDA_ENDPOINT_URL')}{lambda_name}"
+        try:
+            logging.info(f"[OFFLINE] Invoking lambda '{lambda_name}' at {url} with payload: {payload}")
+            response = requests.post(url, json=payload)
+            response.raise_for_status()
+            logging.info(f"[OFFLINE] Lambda invoked successfully. HTTP code: {response.status_code}")
+            return {"status": "ok"}
+        except requests.RequestException as e:
+            logging.error(f"[OFFLINE] Error invoking lambda via HTTP: {e}")
+            raise RuntimeError("Error invoking lambda locally") from e
+    else:
+        try:
+            logging.info(f"[AWS] Invoking lambda '{lambda_name}' via boto3 with payload: {payload}")
+            lambda_client = boto3.client("lambda")
+            response = lambda_client.invoke(
+                FunctionName=lambda_name,
+                InvocationType='Event',
+                Payload=json.dumps(payload)
+            )
+            logging.info(f"[AWS] Lambda invoked. Status code: {response['StatusCode']}")
+            return response
+        except ClientError as e:
+            logging.error(f"[AWS] Error invoking lambda via boto3: {e}")
+            raise RuntimeError("Error invoking lambda on AWS") from e
     
 #endregion
 
 def lambda_handler(event, context):
     try:
-        number_of_args_combinations_batches = event['number_of_args_combinations_batches']
+        if "body" in event: # if the event comes from http (Local testing)
+            payload = json.loads(event["body"])
+        else:               # if the event comes from AWS Lambda
+            payload = event
+        number_of_args_combinations_batches = payload.get("number_of_args_combinations_batches")
         if number_of_args_combinations_batches < 1:
             logging.error("No args combinations batches to process. Exiting.")
             return {"status": "failed"}
@@ -229,8 +250,6 @@ def lambda_handler(event, context):
         if len(simulation_config["NMCs"]) != len(simulation_config["p"]):
             logging.error("Error: The length of NMCs and p does not match.")
             return {"status": "failed"}
-
-        lambda_client = get_connection_lambda()
 
         for code_val in simulation_config["codeConfig"]:
             for p_val_index, p_val in enumerate(simulation_config["p"]):
@@ -266,7 +285,7 @@ def lambda_handler(event, context):
                     if i % size_batch == 0:
                         batch_counter = i // size_batch
 
-                        if batch_counter > 3: # ! Para pruebas locales. Eliminar si se quieren ejecutar todos los lotes.
+                        if batch_counter > 2: # ! Para pruebas locales. Eliminar si se quieren ejecutar todos los lotes.
                             continue
                         
                         logging.info(f"Saving batch {batch_counter}...")
@@ -286,7 +305,6 @@ def lambda_handler(event, context):
                         # Save batch info in DynamoDB samples_dynamodb.
                         upload_samples_info_to_dynamodb(id_nmc_batch, s3_path)
 
-                        # ! TO TEST
                         if not os.getenv('LAMBDA_NMC_WORKER_NAME'):
                             raise ValueError("LAMBDA_NMC_WORKER_NAME no está definida en las variables de entorno")
                         
@@ -294,7 +312,7 @@ def lambda_handler(event, context):
                             'id_nmc_batch': id_nmc_batch,
                             'number_of_args_combinations_batches': number_of_args_combinations_batches
                             }
-                        response = invoke_lambda(lambda_client, payload, os.getenv('LAMBDA_NMC_WORKER_NAME'))
+                        response = invoke_lambda(payload, os.getenv('LAMBDA_NMC_WORKER_NAME'))
                         logging.info(f"nmc_worker invoked with response: {response}")
                     
                         batch_detectors = []

@@ -32,7 +32,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 
 import dotenv
-dotenv.load_dotenv()
+# dotenv.load_dotenv()
 
 #region S3 Functions
 def get_connection_s3():
@@ -187,7 +187,7 @@ def get_args_list_from_dynamodb(id_batch_arguments):
         logging.error(f"Error getting arguments from DynamoDB: {e}")
         raise RuntimeError("Error getting arguments from DynamoDB") from e
 
-def add_workers_completed_to_dynamodb(id_nmc_batch):
+def add_workers_completed_to_dynamodb(dynamodb, id_nmc_batch):
     """Increment the 'workers_completed' counter for an NMC batch in DynamoDB.
 
     This is called when an args_worker finishes its job.
@@ -205,7 +205,6 @@ def add_workers_completed_to_dynamodb(id_nmc_batch):
             }
     """
     try:
-        dynamodb = get_connection_dynamodb()
         table = dynamodb.Table(os.getenv('DYNAMODB_SAMPLES_TABLE_NAME'))
         response = table.update_item(
             Key={
@@ -222,19 +221,13 @@ def add_workers_completed_to_dynamodb(id_nmc_batch):
         logging.error(f"Error adding workers completed to DynamoDB: {e}")
         raise RuntimeError("Error adding workers completed to DynamoDB") from e
 
-def create_results_table_if_not_exists(table_name):
+def create_results_table_if_not_exists(dynamodb, table_name):
     """Create a DynamoDB table for storing results if it does not exist.
     Args:
         table_name (str): The name of the DynamoDB table to create.
     Returns:
         table: The created or existing table.
     """
-
-    try:
-        dynamodb = get_connection_dynamodb()
-    except ClientError as e:
-        logging.error(f"Error connecting to DynamoDB: {e}")
-        raise RuntimeError("Error connecting to DynamoDB") from e
 
     try:
         logging.info(f"Checking if table '{table_name}' exists...")
@@ -407,10 +400,23 @@ def lambda_handler(event, context=None):
             if os.getenv('DYNAMODB_RESULTS_TABLE_NAME') is None:
                 raise ValueError("DYNAMODB_RESULTS_TABLE_NAME is not defined in environment variables")
             logging.info(f"Saving results to DynamoDB for id_nmc_batch: {id_nmc_batch}, id_arguments: {arguments['id_arguments']}")
-            save_results_to_dynamodb(os.getenv('DYNAMODB_RESULTS_TABLE_NAME'), results)
-            logging.info(f"Results saved for nmc_batch {id_nmc_batch} with arguments {arguments['id_arguments']}")
+            
+            dynamodb = get_connection_dynamodb()
 
-        if add_workers_completed_to_dynamodb(id_nmc_batch) >= number_of_args_combinations_batches:
+            # ! SOLO PARA PRUEBAS LOCALES - Comprobación de que la tabla existe o se crea si no existe.
+            table = create_results_table_if_not_exists(dynamodb, os.getenv('DYNAMODB_RESULTS_TABLE_NAME')) 
+            
+            # ! EN PRODUCCIÓN - Se asume que la tabla ya existe.
+            # table = dynamodb.Table(os.getenv('DYNAMODB_RESULTS_TABLE_NAME'))
+
+            try:
+                table.put_item(Item=results)
+                logging.info(f"Results saved to DynamoDB for id_nmc_batch: {results['id_nmc_batch']}")
+            except ClientError as e:
+                logging.error(f"Error saving results to DynamoDB: {e}")
+                raise RuntimeError("Error saving results to DynamoDB") from e
+
+        if add_workers_completed_to_dynamodb(dynamodb, id_nmc_batch) >= number_of_args_combinations_batches:
             delete_samples_from_s3(os.getenv('S3_BUCKET_NAME'), samples_info["s3_data_path"])
 
         return {"status": "ok"}

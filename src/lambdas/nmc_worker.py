@@ -15,7 +15,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 
 import dotenv
-dotenv.load_dotenv()
+# dotenv.load_dotenv()
 
 
 #region Lambda Functions

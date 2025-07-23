@@ -18,9 +18,6 @@ provider:
 plugins:
   - serverless-offline
 
-include:
-  - src/libs/**
-
 functions:
   args_mixer:
     handler: src/lambdas/args_mixer.lambda_handler
