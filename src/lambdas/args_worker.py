@@ -344,11 +344,18 @@ def do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables
 
 def lambda_handler(event, context=None):
     try:
+        logging.info(f"Event received in args_worker lambda_handler")
+
         # * Input variables
         # Event variables received from nmc_worker
-        id_nmc_batch = event["id_nmc_batch"]
-        number_of_args_combinations_batches = event["number_of_args_combinations_batches"]
-        id_batch_arguments = event["id_batch_arguments"]
+        if "body" in event: # if the event comes from http (Local testing)
+            received_event = json.loads(event["body"])
+        else:               # if the event comes from AWS Lambda
+            received_event = event
+
+        id_nmc_batch = received_event.get("id_nmc_batch")
+        number_of_args_combinations_batches = received_event.get("number_of_args_combinations_batches")
+        id_batch_arguments = received_event.get("id_batch_arguments")
 
         # Simulation variables extracted from id_nmc_batch
         codeConfig = int(id_nmc_batch.split("_")[1])

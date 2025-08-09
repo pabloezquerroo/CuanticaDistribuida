@@ -170,7 +170,7 @@ Herramientas y pasos a seguir para la prueba del proyecto en un entorno local.
 4.  **Ejecutar los Scripts individualmente:**
     -   Ejecuta los scripts en el orden correcto, empezando por `args_mixer.py`.
     ```bash
-    uv run <nombre-scrip>
+    uv run <nombre-script>
     ```
 
 5. **Ejecutar pipeline en local:**

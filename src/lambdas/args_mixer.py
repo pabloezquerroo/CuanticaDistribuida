@@ -170,9 +170,8 @@ def invoke_lambda(payload, lambda_name):
         try:
             logging.info(f"[OFFLINE] Invoking lambda '{lambda_name}' at {url} with payload: {payload}")
             response = requests.post(url, json=payload)
-            response.raise_for_status()
             logging.info(f"[OFFLINE] Lambda invoked successfully. HTTP code: {response.status_code}")
-            return {"status": "ok"}
+            return {"status": "invoked"}
         except requests.RequestException as e:
             logging.error(f"[OFFLINE] Error invoking lambda via HTTP: {e}")
             raise RuntimeError("Error invoking lambda locally") from e
@@ -252,10 +251,10 @@ def lambda_handler(event, context):
         if not os.getenv('LAMBDA_ORCHESTRATOR_NAME'):
             raise ValueError("LAMBDA_ORCHESTRATOR_NAME no está definida en las variables de entorno")
         
-        payload = {
+        event = {
             'number_of_args_combinations_batches': number_of_args_combinations_batches
         }
-        response = invoke_lambda(payload, os.getenv('LAMBDA_ORCHESTRATOR_NAME'))
+        response = invoke_lambda(event, os.getenv('LAMBDA_ORCHESTRATOR_NAME'))
         logging.info(f"Orchestrator invoked with response: {response}")
 
         return {"status": "ok"}

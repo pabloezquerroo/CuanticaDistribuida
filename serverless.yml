@@ -21,19 +21,19 @@ plugins:
 functions:
   args_mixer:
     handler: src/lambdas/args_mixer.lambda_handler
-    timeout: 30
     events:
       - http:
           path: args_mixer
           method: post
+    timeout: 900
 
   orchestrator:
     handler: src/lambdas/orchestrator.lambda_handler
-    timeout: 30
     events:
       - http: 
           path: orchestrator
           method: post
+    timeout: 900
 
   nmc_worker:
     handler: src/lambdas/nmc_worker.lambda_handler
@@ -41,12 +41,12 @@ functions:
       - http:
           path: nmc_worker
           method: post
+    timeout: 900
 
   args_worker:
     handler: src/lambdas/args_worker.lambda_handler
-    timeout: 30
     events:
       - http:
           path: args_worker
           method: post
-
+    timeout: 900

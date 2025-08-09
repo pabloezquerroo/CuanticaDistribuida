@@ -207,9 +207,8 @@ def invoke_lambda(payload, lambda_name):
         try:
             logging.info(f"[OFFLINE] Invoking lambda '{lambda_name}' at {url} with payload: {payload}")
             response = requests.post(url, json=payload)
-            response.raise_for_status()
             logging.info(f"[OFFLINE] Lambda invoked successfully. HTTP code: {response.status_code}")
-            return {"status": "ok"}
+            return {"status": "invoked"}
         except requests.RequestException as e:
             logging.error(f"[OFFLINE] Error invoking lambda via HTTP: {e}")
             raise RuntimeError("Error invoking lambda locally") from e
@@ -232,11 +231,13 @@ def invoke_lambda(payload, lambda_name):
 
 def lambda_handler(event, context):
     try:
+        logging.info(f"Event received in orchestrator lambda_handler")
+
         if "body" in event: # if the event comes from http (Local testing)
-            payload = json.loads(event["body"])
+            received_event = json.loads(event["body"])
         else:               # if the event comes from AWS Lambda
-            payload = event
-        number_of_args_combinations_batches = payload.get("number_of_args_combinations_batches")
+            received_event = event
+        number_of_args_combinations_batches = received_event.get("number_of_args_combinations_batches")
         if number_of_args_combinations_batches < 1:
             logging.error("No args combinations batches to process. Exiting.")
             return {"status": "failed"}
@@ -285,8 +286,8 @@ def lambda_handler(event, context):
                     if i % size_batch == 0:
                         batch_counter = i // size_batch
 
-                        if batch_counter > 2: # ! Para pruebas locales. Eliminar si se quieren ejecutar todos los lotes.
-                            continue
+                        # if batch_counter > 2: # ! Para pruebas locales. Eliminar si se quieren ejecutar todos los lotes.
+                        #     continue
                         
                         logging.info(f"Saving batch {batch_counter}...")
 
@@ -308,11 +309,11 @@ def lambda_handler(event, context):
                         if not os.getenv('LAMBDA_NMC_WORKER_NAME'):
                             raise ValueError("LAMBDA_NMC_WORKER_NAME no está definida en las variables de entorno")
                         
-                        payload = {
+                        event = {
                             'id_nmc_batch': id_nmc_batch,
                             'number_of_args_combinations_batches': number_of_args_combinations_batches
                             }
-                        response = invoke_lambda(payload, os.getenv('LAMBDA_NMC_WORKER_NAME'))
+                        response = invoke_lambda(event, os.getenv('LAMBDA_NMC_WORKER_NAME'))
                         logging.info(f"nmc_worker invoked with response: {response}")
                     
                         batch_detectors = []
