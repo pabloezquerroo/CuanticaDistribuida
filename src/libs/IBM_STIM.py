@@ -5,7 +5,7 @@ from scipy import sparse
 from typing import List, FrozenSet, Dict
 from functools import reduce
 from scipy.sparse import identity, hstack, kron, csr_matrix
-from utils import row_echelon, rank, kernel, compute_code_distance, inverse, int2bin
+from src.libs.utils import row_echelon, rank, kernel, compute_code_distance, inverse, int2bin
 from collections import deque
 
 

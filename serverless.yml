@@ -1,0 +1,52 @@
+org: pabloezquerro
+service: cuantica-distribuida-local
+provider:
+  name: aws
+  runtime: python3.12
+  region: us-east-1
+  environment:
+    IS_OFFLINE: true
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - lambda:InvokeFunction
+          Resource:
+            - "*"
+
+plugins:
+  - serverless-offline
+
+functions:
+  args_mixer:
+    handler: src/lambdas/args_mixer.lambda_handler
+    events:
+      - http:
+          path: args_mixer
+          method: post
+    timeout: 900
+
+  orchestrator:
+    handler: src/lambdas/orchestrator.lambda_handler
+    events:
+      - http: 
+          path: orchestrator
+          method: post
+    timeout: 900
+
+  nmc_worker:
+    handler: src/lambdas/nmc_worker.lambda_handler
+    events:
+      - http:
+          path: nmc_worker
+          method: post
+    timeout: 900
+
+  args_worker:
+    handler: src/lambdas/args_worker.lambda_handler
+    events:
+      - http:
+          path: args_worker
+          method: post
+    timeout: 900

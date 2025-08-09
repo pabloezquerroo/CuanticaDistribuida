@@ -20,8 +20,8 @@ import time
 from ldpc import BpDecoder  
 from ldpc.bplsd_decoder import BpLsdDecoder
 from ldpc import BpOsdDecoder  
-from dem_to_matrices import detector_error_model_to_check_matrices
-from IBM_STIM import create_bivariate_bicycle_codes, build_circuit, select_configuration
+from src.libs.dem_to_matrices import detector_error_model_to_check_matrices
+from src.libs.IBM_STIM import create_bivariate_bicycle_codes, build_circuit, select_configuration
 
 import boto3
 from botocore.exceptions import ClientError
@@ -32,7 +32,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 
 import dotenv
-dotenv.load_dotenv()
+# dotenv.load_dotenv()
 
 #region S3 Functions
 def get_connection_s3():
@@ -158,7 +158,6 @@ def replace_decimals(obj):
     else:
         return obj
 
-
 def get_args_list_from_dynamodb(id_batch_arguments):
     """Retrieve a set of arguments from the DynamoDB arguments table.
 
@@ -172,15 +171,13 @@ def get_args_list_from_dynamodb(id_batch_arguments):
         dynamodb = get_connection_dynamodb()
         table = dynamodb.Table(os.getenv('DYNAMODB_ARGS_TABLE_NAME'))
         
-        # Query the table for all items with the given id_batch_arguments
+        # Query the table for all items with the given id_batch_arguments 
         response = table.query(
             KeyConditionExpression=Key('id_batch_arguments').eq(id_batch_arguments)
         )
-        
         items = response.get('Items', [])
         if not items:
             logging.warning(f"No arguments found for id_batch_arguments: {id_batch_arguments}")
-
         else:
             for item in items:
                 item["arguments"] = replace_decimals(item["arguments"])    
@@ -190,7 +187,7 @@ def get_args_list_from_dynamodb(id_batch_arguments):
         logging.error(f"Error getting arguments from DynamoDB: {e}")
         raise RuntimeError("Error getting arguments from DynamoDB") from e
 
-def add_workers_completed_to_dynamodb(id_nmc_batch):
+def add_workers_completed_to_dynamodb(dynamodb, id_nmc_batch):
     """Increment the 'workers_completed' counter for an NMC batch in DynamoDB.
 
     This is called when an args_worker finishes its job.
@@ -208,7 +205,6 @@ def add_workers_completed_to_dynamodb(id_nmc_batch):
             }
     """
     try:
-        dynamodb = get_connection_dynamodb()
         table = dynamodb.Table(os.getenv('DYNAMODB_SAMPLES_TABLE_NAME'))
         response = table.update_item(
             Key={
@@ -224,13 +220,75 @@ def add_workers_completed_to_dynamodb(id_nmc_batch):
     except ClientError as e:
         logging.error(f"Error adding workers completed to DynamoDB: {e}")
         raise RuntimeError("Error adding workers completed to DynamoDB") from e
+
+def create_results_table_if_not_exists(dynamodb, table_name):
+    """Create a DynamoDB table for storing results if it does not exist.
+    Args:
+        table_name (str): The name of the DynamoDB table to create.
+    Returns:
+        table: The created or existing table.
+    """
+
+    try:
+        logging.info(f"Checking if table '{table_name}' exists...")
+        table = dynamodb.Table(table_name)
+        table.load()
+        logging.info(f"Table '{table_name}' already exists.")
+        return table
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ResourceNotFoundException':
+            logging.warning(f"Table '{table_name}' does not exist. Creating...")
+            try:
+                table = dynamodb.create_table(
+                    TableName=table_name,
+                    KeySchema=[
+                        {'AttributeName': 'id_nmc_batch', 'KeyType': 'HASH'},
+                        {'AttributeName': 'id_arguments', 'KeyType': 'RANGE'}
+                    ],
+                    AttributeDefinitions=[
+                        {'AttributeName': 'id_nmc_batch', 'AttributeType': 'S'},
+                        {'AttributeName': 'id_arguments', 'AttributeType': 'N'}
+                    ],
+                    ProvisionedThroughput={
+                        'ReadCapacityUnits': 5,
+                        'WriteCapacityUnits': 5
+                    }
+                )
+                table.wait_until_exists()
+                logging.info(f"Table '{table_name}' created successfully.")
+                return table
+            except ClientError as e2:
+                logging.error(f"Error creating table '{table_name}': {e2}")
+                raise RuntimeError("Error creating table") from e2
+        else:
+            logging.error(f"Unexpected error when checking table '{table_name}': {e}")
+            raise RuntimeError("Error checking table existence") from e
+
+def save_results_to_dynamodb(table_name, results):
+    """Save the results of a simulation to the DynamoDB results table.
+
+    Args:
+        results (dict): The results to save, including id_nmc_batch, codeConfig, p, decoder_type, id_arguments, arguments, Pl, time_av, time_max, successful_correction_iterations.
+
+    Returns:
+        dict: The response from the put_item call.
+    """
+    try:
+        table = create_results_table_if_not_exists(table_name)
+        response = table.put_item(Item=results)
+        logging.info(f"Results saved to DynamoDB for id_nmc_batch: {results['id_nmc_batch']}")
+        return response
+    except ClientError as e:
+        logging.error(f"Error saving results to DynamoDB: {e}")
+        raise RuntimeError("Error saving results to DynamoDB") from e
 #endregion
 
 def do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables, pcm, observable_mat, error_channel):
 
-    if arguments.get("arguments", {}).get("error_channel") == "dem_error_channel":
+    # If there is the argument "error_channel==dem_error_channel", it is hardcoded to matrices.priors
+    if( "error_channel" in arguments["arguments"] and arguments["arguments"]["error_channel"] == "dem_error_channel" ):
         arguments["arguments"]["error_channel"] = error_channel
-        
+       
     # * Initialize decoders
     if arguments["decoder_type"] == "BP":
         logging.info(f"BP decoder initialized")
@@ -262,99 +320,124 @@ def do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables
         time_max = max(time_max, (b - a))
 
         logical_error = (observable_mat @ predicted_observables + observables[i]) % 2
-
-        if np.any(logical_error):
+        if np.any(logical_error == 1):
             Pl += 1 / NMCs_size
             successful_correction_iterations.append(i)
 
     # * Results
+    if "error_channel" in arguments["arguments"]:
+        arguments["arguments"]["error_channel"] = "dem_error_channel"
+
     results = {
         "id_nmc_batch": id_nmc_batch, # ID of the NMC batch: nmc_{code}_{p(0c001)}_{nmc_batch_counter}
-        "codeConfig": codeConfig, # Possible codes: 72, 90, 108, 144, 288, 784
-        "p": p, # Error probability
-        "decoder_type": arguments["decoder_type"], # Type of decoder
         "id_arguments": arguments["id_arguments"], # ID of the arguments used
+        "codeConfig": codeConfig, # Possible codes: 72, 90, 108, 144, 288, 784
+        "p": decimal.Decimal(str(p)), # Error probability
+        "decoder_type": arguments["decoder_type"], # Type of decoder
         "arguments": arguments, # Arguments for the decoder
-        "Pl": Pl, # Logical error detection probability in the batch
-        "time_av": time_av, # Average decoding time in the batch
-        "time_max": time_max, # Maximum decoding time in the batch
+        "Pl": decimal.Decimal(str(Pl)), # Logical error detection probability in the batch
+        "time_av": decimal.Decimal(str(time_av)), # Average decoding time in the batch
+        "time_max": decimal.Decimal(str(time_max)), # Maximum decoding time in the batch
         "successful_correction_iterations": successful_correction_iterations # Iterations where the decoder successfully corrected the error
     }
     return results
 
 def lambda_handler(event, context=None):
-
-    # * Input variables
-    # Event variables received from nmc_worker
-    id_nmc_batch = event["id_nmc_batch"]
-    number_of_args_combinations_batches = event["number_of_args_combinations_batches"]
-    id_batch_arguments = event["id_batch_arguments"]
-
-    # Simulation variables extracted from id_nmc_batch
-    codeConfig = int(id_nmc_batch.split("_")[1])
-    p = float(id_nmc_batch.split("_")[2].replace("c", "."))
-
-    logging.info(f"codeConfig: {codeConfig}, p: {p}")
-
-    # * Build quantum code
-    # Parameters for simulation
-    config = select_configuration(codeConfig)
-    ell, m = config["ell"], config["m"]
-    a1, a2, a3 = config["a"]
-    b1, b2, b3 = config["b"]
-    d = config["d"]
-    logging.info(f"Config with codeConfig {codeConfig} loaded")
-    # Construct the polynomials A and B for the code
-    A_x_pows, A_y_pows = [a1], [a2, a3] 
-    B_x_pows, B_y_pows = [b2, b3], [b1]
-    code, A_list, B_list = create_bivariate_bicycle_codes(ell, m, A_x_pows, A_y_pows, B_x_pows, B_y_pows)
-    logging.info(f"Bivariate bicycle code created")
-    # ! ¿Por qué se calcula pcm aquí si luego se calcula de nuevo?
-    # pcm = sparse.csc_matrix(code.hx, dtype=np.uint8)
-
-    # * Build circuit and detector error model
-    circuit = build_circuit(code, A_list, B_list, p=p, num_repeat=d, z_basis=False, use_both=False)
-    logging.info(f"Circuit built")
-    dem = circuit.detector_error_model()
-    logging.info(f"Detector error model built")
-    
-    # * Convert detector error model to check matrices
-    matrices = detector_error_model_to_check_matrices(dem, allow_undecomposed_hyperedges=True)
-    logging.info(f"Detector error model converted to check matrices")
-    pcm = matrices.check_matrix                     # Parity check matrix
-    observable_mat = matrices.observables_matrix    # Logical observables matrix
-    error_channel = matrices.priors
-
-    # Args variables loaded from DynamoDB
-    args_list = get_args_list_from_dynamodb(id_batch_arguments)
-    logging.info(f"Args variables loaded from DynamoDB")
-
-    # Detector and observable arrays loaded from S3
-    samples_info = get_samples_info_from_dynamodb(id_nmc_batch)
-    detectors, observables = get_samples_from_s3(os.getenv('S3_BUCKET_NAME'), samples_info["s3_data_path"]).values()
-    
-    for arguments in args_list:
-        results = do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables, pcm, observable_mat, error_channel)
-        
-        # TODO: Guardar los resultados en una BD
-        print("--------------------------------")
-        for k, v in results.items():
-            print(f"{k}: {v}")
-        print("--------------------------------")
-    
-    if add_workers_completed_to_dynamodb(id_nmc_batch) >= number_of_args_combinations_batches:
-        delete_samples_from_s3(os.getenv('S3_BUCKET_NAME'), samples_info["s3_data_path"])
-
-    return {"status": "ok"}
-
-if __name__ == "__main__":
-    id_nmc_batch = "nmc_90_0c001_1"
-    number_of_args_combinations_batches = 1
-    id_batch_arguments = 0
     try:
-        logging.info(f"Executing args_worker.py locally...")
-        lambda_handler({"id_nmc_batch": id_nmc_batch, "number_of_args_combinations_batches": number_of_args_combinations_batches, "id_batch_arguments": id_batch_arguments}, None)
-        logging.info("Local execution finished.")
+        logging.info(f"Event received in args_worker lambda_handler")
+
+        # * Input variables
+        # Event variables received from nmc_worker
+        if "body" in event: # if the event comes from http (Local testing)
+            received_event = json.loads(event["body"])
+        else:               # if the event comes from AWS Lambda
+            received_event = event
+
+        id_nmc_batch = received_event.get("id_nmc_batch")
+        number_of_args_combinations_batches = received_event.get("number_of_args_combinations_batches")
+        id_batch_arguments = received_event.get("id_batch_arguments")
+
+        # Simulation variables extracted from id_nmc_batch
+        codeConfig = int(id_nmc_batch.split("_")[1])
+        p = float(id_nmc_batch.split("_")[2].replace("c", "."))
+
+        logging.info(f"codeConfig: {codeConfig}, p: {p}")
+
+        # * Build quantum code
+        # Parameters for simulation
+        config = select_configuration(codeConfig)
+        ell, m = config["ell"], config["m"]
+        a1, a2, a3 = config["a"]
+        b1, b2, b3 = config["b"]
+        d = config["d"]
+        logging.info(f"Config with codeConfig {codeConfig} loaded")
+        # Construct the polynomials A and B for the code
+        A_x_pows, A_y_pows = [a1], [a2, a3] 
+        B_x_pows, B_y_pows = [b2, b3], [b1]
+        code, A_list, B_list = create_bivariate_bicycle_codes(ell, m, A_x_pows, A_y_pows, B_x_pows, B_y_pows)
+        logging.info(f"Bivariate bicycle code created")
+        # ! ¿Por qué se calcula pcm aquí si luego se calcula de nuevo?
+        # pcm = sparse.csc_matrix(code.hx, dtype=np.uint8)
+
+        # * Build circuit and detector error model
+        circuit = build_circuit(code, A_list, B_list, p=p, num_repeat=d, z_basis=False, use_both=False)
+        logging.info(f"Circuit built")
+        dem = circuit.detector_error_model()
+        logging.info(f"Detector error model built")
+        
+        # * Convert detector error model to check matrices
+        matrices = detector_error_model_to_check_matrices(dem, allow_undecomposed_hyperedges=True)
+        logging.info(f"Detector error model converted to check matrices")
+        pcm = matrices.check_matrix                     # Parity check matrix
+        observable_mat = matrices.observables_matrix    # Logical observables matrix
+        error_channel = matrices.priors
+
+        # Args variables loaded from DynamoDB
+        args_list = get_args_list_from_dynamodb(id_batch_arguments)
+        logging.info(f"Args variables loaded from DynamoDB")
+
+        # Detector and observable arrays loaded from S3
+        samples_info = get_samples_info_from_dynamodb(id_nmc_batch)
+        detectors, observables = get_samples_from_s3(os.getenv('S3_BUCKET_NAME'), samples_info["s3_data_path"]).values()
+        
+        for arguments in args_list:
+            results = do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables, pcm, observable_mat, error_channel)
+            
+            # * Save results to DynamoDB
+            if os.getenv('DYNAMODB_RESULTS_TABLE_NAME') is None:
+                raise ValueError("DYNAMODB_RESULTS_TABLE_NAME is not defined in environment variables")
+            logging.info(f"Saving results to DynamoDB for id_nmc_batch: {id_nmc_batch}, id_arguments: {arguments['id_arguments']}")
+            
+            dynamodb = get_connection_dynamodb()
+
+            # ! SOLO PARA PRUEBAS LOCALES - Comprobación de que la tabla existe o se crea si no existe.
+            table = create_results_table_if_not_exists(dynamodb, os.getenv('DYNAMODB_RESULTS_TABLE_NAME')) 
+            
+            # ! EN PRODUCCIÓN - Se asume que la tabla ya existe.
+            # table = dynamodb.Table(os.getenv('DYNAMODB_RESULTS_TABLE_NAME'))
+
+            try:
+                table.put_item(Item=results)
+                logging.info(f"Results saved to DynamoDB for id_nmc_batch: {results['id_nmc_batch']}")
+            except ClientError as e:
+                logging.error(f"Error saving results to DynamoDB: {e}")
+                raise RuntimeError("Error saving results to DynamoDB") from e
+
+        if add_workers_completed_to_dynamodb(dynamodb, id_nmc_batch) >= number_of_args_combinations_batches:
+            delete_samples_from_s3(os.getenv('S3_BUCKET_NAME'), samples_info["s3_data_path"])
+
+        return {"status": "ok"}
     except Exception as e:
-        logging.error(f"Error in args_worker.py: {e}")
-        raise RuntimeError("Error in args_worker.py") from e
+        logging.error(f"Error in args_worker lambda_handler: {e}")
+        return {"status": "failed"}
+# if __name__ == "__main__":
+#     id_nmc_batch = "nmc_90_0c001_2" # nmc_{code}_{p}_{nmc_batch_counter}
+#     number_of_args_combinations_batches = 1
+#     id_batch_arguments = 0
+#     try:
+#         logging.info(f"Executing args_worker.py locally...")
+#         lambda_handler({"id_nmc_batch": id_nmc_batch, "number_of_args_combinations_batches": number_of_args_combinations_batches, "id_batch_arguments": id_batch_arguments}, None)
+#         logging.info("Local execution finished.")
+#     except Exception as e:
+#         logging.error(f"Error in args_worker.py: {e}")
+#         raise RuntimeError("Error in args_worker.py") from e

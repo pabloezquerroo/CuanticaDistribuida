@@ -121,14 +121,13 @@ Los componentes se comunican de forma asíncrona a través de S3 para el almacen
     -   Guarda el resultado final en una base de datos de resultados (DB).
     -   **Coordina la limpieza**: Incrementa el contador `workers_completed` en `samples_dynamodb`. Si es el último worker para ese `id_nmc_batch`, borra el archivo de datos temporales de S3 y la entrada correspondiente en `samples_dynamodb`.
 
--   **Servicios de AWS**
-    -   **S3**: Almacena el `config.json` inicial y los datos temporales de simulación (detectores/observables).
-    -   **DynamoDB (`args_dynamodb`)**: Tabla de parámetros. Almacena los lotes de combinaciones de argumentos.
-    -   **DynamoDB (`samples_dynamodb`)**: Tabla de estado. Rastrea los lotes de datos de simulación y cuántos workers han terminado.
-    -   **DB de Resultados**: Base de datos final para almacenar los resultados de las simulaciones.
+### Servicios AWS
+-   **Lambda**: Ejecucion de las diferentes funciones que conforman la arquitectura distribuida.
+-   **S3**: Almacenamineto de las variables de configuración iniciales (`config.json`) y los datos temporales de simulación (detectores/observables).
+-   **DynamoDB**: Almacenamiento de combinaciones de argumentos para los decoders (`args_dynamodb`), información referente a los datos temporales de la simulación (`samples_dynamodb`).
+-   **DB de Resultados**: Base de datos final para almacenar los resultados de las simulaciones. _Temporalmente se usa DynamoDB(`results_dynamoDB`)_
 
 ### Flujo de Ejecución
-
 1.  **Inicio**: Un usuario sube el archivo `config.json` a S3, lo que dispara `args_mixer`.
 2.  **`args_mixer`**: Genera las combinaciones de argumentos y las guarda en `args_dynamodb`. Invoca al `orchestrator`.
 3.  **`orchestrator`**: Genera un lote de datos de simulación (ej. 1000 NMCs), lo guarda en S3 y crea una entrada de seguimiento en `samples_dynamodb`. Invoca a `nmc_worker` con el ID del lote de datos (`id_nmc_batch`).
@@ -142,9 +141,9 @@ Los componentes se comunican de forma asíncrona a través de S3 para el almacen
 ## Ejecución y pruebas
 
 ### Local
-Para probar el sistema en un entorno local, se utiliza Docker para simular los servicios de AWS.
+Herramientas y pasos a seguir para la prueba del proyecto en un entorno local.
 
-1.  **Instala gestor de paquetes y entornos virtuales [uv](https://docs.astral.sh/uv/):**
+1.  **En este caso se ha usado el gestor de paquetes y entornos virtuales [uv](https://docs.astral.sh/uv/):**
     -   Instala con script:
     ```bash
     curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -153,26 +152,40 @@ Para probar el sistema en un entorno local, se utiliza Docker para simular los s
     ```bash
     brew install uv
     ```
-
-2.  **Instala las dependencias del proyecto:**
     -   Instala las dependencias definidas en `pyproject.toml` y `uv.lock`.
     ```bash
     uv sync
     ```
 
-3.  **Configuración del Entorno:**
-    -   Crea un archivo `.env` en la raíz del proyecto con las variables de entorno necesarias para conectar con S3 y la DynamoDB local. Consulta el archivo `.env.example` para ver las variables requeridas.
+2.  **Configuración del Entorno:**
+    -   Crea un archivo `.env` en la raíz del proyecto con las variables de entorno necesarias. Consulta el archivo `.env.example` para ver las variables requeridas.
 
-4.  **Iniciar Servicios:**
+3.  **Iniciar DynamoDB local:**
     -   Usa el archivo `resources/docker-compose.yaml` para levantar un contenedor con DynamoDB local.
     ```bash
     cd resources
     docker-compose up
     ```
 
-5.  **Ejecutar los Scripts:**
+4.  **Ejecutar los Scripts individualmente:**
     -   Ejecuta los scripts en el orden correcto, empezando por `args_mixer.py`.
     ```bash
-    python src/args_mixer.py
+    uv run <nombre-script>
     ```
+
+5. **Ejecutar pipeline en local:**
+    -   Instalamos el framework [serverless](https://www.serverless.com/)
+    ```bash
+    npm install serverless-offline --save-dev
+    ```
+    -   Utilizamons el plugin [serverless offline](https://www.serverless.com/plugins/serverless-offline).
+    > Necesario, previamente, lanzar entorno virtual generado por [uv](https://docs.astral.sh/uv/) (```source .venv/bin/activate```).
+    ```bash
+    serverless offline start
+    ```
+    -   Invocamos a la función Lambda (nombre definido en serverless.yml)
+    ```bash
+    curl -X POST http://localhost:3000/dev/<nombre-funcion>
+    ```
+
 ---

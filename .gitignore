@@ -15,3 +15,7 @@ __pycache__/
 
 # Local testing
 dynamodb_data
+
+# Node
+node_modules
+package-lock.json
