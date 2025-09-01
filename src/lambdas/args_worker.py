@@ -264,23 +264,6 @@ def create_results_table_if_not_exists(dynamodb, table_name):
             logging.error(f"Unexpected error when checking table '{table_name}': {e}")
             raise RuntimeError("Error checking table existence") from e
 
-def save_results_to_dynamodb(table_name, results):
-    """Save the results of a simulation to the DynamoDB results table.
-
-    Args:
-        results (dict): The results to save, including id_nmc_batch, codeConfig, p, decoder_type, id_arguments, arguments, Pl, time_av, time_max, successful_correction_iterations.
-
-    Returns:
-        dict: The response from the put_item call.
-    """
-    try:
-        table = create_results_table_if_not_exists(table_name)
-        response = table.put_item(Item=results)
-        logging.info(f"Results saved to DynamoDB for id_nmc_batch: {results['id_nmc_batch']}")
-        return response
-    except ClientError as e:
-        logging.error(f"Error saving results to DynamoDB: {e}")
-        raise RuntimeError("Error saving results to DynamoDB") from e
 #endregion
 
 def do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables, pcm, observable_mat, error_channel):

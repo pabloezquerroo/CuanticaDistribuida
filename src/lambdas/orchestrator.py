@@ -233,6 +233,12 @@ def lambda_handler(event, context):
     try:
         logging.info(f"Event received in orchestrator lambda_handler")
 
+        # Set seed for reproducibility if SEED_MODE is enabled
+        seed = None
+        if os.getenv('SEED_MODE'):  
+            seed = int(os.getenv('SEED'))
+            logging.info(f"SEED_MODE is enabled. Using seed: {seed}")           
+
         if "body" in event: # if the event comes from http (Local testing)
             received_event = json.loads(event["body"])
         else:               # if the event comes from AWS Lambda
@@ -277,7 +283,7 @@ def lambda_handler(event, context):
 
                 for i in range(1, total_nmcs + 1):
                     logging.info(f"Simulating {i} of {total_nmcs}...")
-                    sampler = circuit.compile_detector_sampler()
+                    sampler = circuit.compile_detector_sampler(seed=seed) #TODO: Probar sermilla
                     detectors, observables = sampler.sample(1, separate_observables=True)                    
                 
                     batch_detectors.append(detectors[0].tolist())

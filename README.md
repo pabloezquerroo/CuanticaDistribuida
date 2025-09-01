@@ -188,4 +188,30 @@ Herramientas y pasos a seguir para la prueba del proyecto en un entorno local.
     curl -X POST http://localhost:3000/dev/<nombre-funcion>
     ```
 
+#### Resultados
+En el directorio `resources/results_process/` se maneja todo lo relacionado con la analítica de los resultados.
+1. **Configurar AWS CLI**
+    ```bash
+    aws configure --profile blackblaze
+    ```
+    - AWS Access Key ID: La Application Key ID de Backblaze.
+    - AWS Secret Access Key: La Application Key Secret de Backblaze.
+    - Region: Elige la región correcta de tu bucket de Backblaze (por ejemplo, eu-central-003)
+2. **Exportar datos de DynamoDB local en `JSON`:**
+    ```bash
+    aws dynamodb scan \
+    --table-name samples_dynamodb \
+    --endpoint-url http://localhost:8001 \
+    --no-paginate --output json \
+    --query "Items" > resources/results_process/results.json
+    ```
+3. **Convertir `JSON` en `parquet`:**
+    ```bash
+    uv run resources/results_process/json_to_parquet.py
+    ```
+4. **Importar `parquet` a S3(backblaze)**
+    ```bash
+    aws s3 cp results.parquet s3://quantum-cloud-data/ --profile backblaze --endpoint-url https://s3.eu-central-003.backblazeb2.com
+    ```
 ---
+

@@ -54,51 +54,121 @@ dotenv.load_dotenv()
 
 # Creación tablas DynamoDB local
 
-def get_connection_dynamodb():
-    return boto3.resource(
-        'dynamodb',
-        region_name=os.getenv('AWS_DEFAULT_REGION'),
-        endpoint_url=os.getenv('DYNAMODB_ENDPOINT_URL'),
-        aws_access_key_id='dummy',
-        aws_secret_access_key='dummy'
+# def get_connection_dynamodb():
+#     return boto3.resource(
+#         'dynamodb',
+#         region_name=os.getenv('AWS_DEFAULT_REGION'),
+#         endpoint_url=os.getenv('DYNAMODB_ENDPOINT_URL'),
+#         aws_access_key_id='dummy',
+#         aws_secret_access_key='dummy'
+#     )
+
+# def create_table(table_name):
+#     try:
+#         dynamodb_client= get_connection_dynamodb()
+        
+#         dynamodb_client.create_table(
+#             TableName=table_name,
+#             KeySchema=[
+#                 {'AttributeName': 'id_nmc_batch', 'KeyType': 'HASH'}
+#             ],
+#             AttributeDefinitions=[
+#                 {'AttributeName': 'id_nmc_batch', 'AttributeType': 'S'}
+#             ],
+#             ProvisionedThroughput={
+#                 'ReadCapacityUnits': 5,
+#                 'WriteCapacityUnits': 5
+#             }
+#         )
+#         print(f"Tabla '{table_name}' creada exitosamente.")
+        
+#     except Exception as e:
+#         print(f"Error al crear la tabla '{table_name}': {e}")
+
+# try:
+#     create_table(os.getenv('DYNAMODB_SAMPLES_TABLE_NAME'))
+#     create_table(os.getenv('DYNAMODB_ARGS_TABLE_NAME'))
+#     print(f"Tablas 'samples_dynamodb' y 'args_dynamodb' creadas exitosamente.")
+
+#     # Intenta listar las tablas (aunque no haya ninguna)
+#     tables = dynamodb_client.list_tables()
+
+#     # Elimina la tabla
+#     dynamodb_client.delete_table(TableName='samples_dynamodb')
+    
+#     print("¡ÉXITO! La conexión con DynamoDB local funciona.")
+#     print(f"Tablas encontradas: {tables['TableNames']}")
+
+# except Exception as e:
+#     print(f"ERROR: No se pudo conectar a DynamoDB local.")
+#     print(f"Detalle: {e}")
+
+def get_s3_client():
+    return boto3.client(
+        's3',
+        endpoint_url='http://localhost:4569',  # Puerto por defecto del plugin
+        aws_access_key_id='S3RVER',  # Credenciales dummy
+        aws_secret_access_key='S3RVER',
+        region_name='us-east-1'
+    )
+def put_object(s3_client, bucket_name, object_key, data):
+    s3_client.put_object(
+        Bucket=bucket_name,
+        Key=object_key,
+        Body=data,
+        ContentType='application/json'
     )
 
-def create_table(table_name):
+def upload_file_to_s3_config(filename):
+    """
+    Sube un archivo desde la carpeta de descargas a la carpeta config del bucket S3
+    
+    Args:
+        filename (str): Nombre del archivo en la carpeta de descargas
+    """
+    downloads_path = os.path.expanduser("~/Downloads")
+    file_path = os.path.join(downloads_path, filename)
+    
     try:
-        dynamodb_client= get_connection_dynamodb()
+        s3_client = get_s3_client()
+        # La key incluye el prefijo 'config/' para crear la estructura de carpetas
+        s3_key = f"config/{filename}"
         
-        dynamodb_client.create_table(
-            TableName=table_name,
-            KeySchema=[
-                {'AttributeName': 'id_nmc_batch', 'KeyType': 'HASH'}
-            ],
-            AttributeDefinitions=[
-                {'AttributeName': 'id_nmc_batch', 'AttributeType': 'S'}
-            ],
-            ProvisionedThroughput={
-                'ReadCapacityUnits': 5,
-                'WriteCapacityUnits': 5
-            }
+        # Leer el archivo
+        with open(file_path, 'rb') as file:
+            file_data = file.read()
+            
+        # Subir al bucket
+        put_object(
+            s3_client, 
+            "quantum-cloud-data",  # Tu nombre de bucket definido en serverless.yml
+            s3_key, 
+            file_data
         )
-        print(f"Tabla '{table_name}' creada exitosamente.")
+        print(f"Archivo '{filename}' subido exitosamente a config/{filename}")
+        
+    except FileNotFoundError:
+        print(f"Error: No se encontró el archivo '{filename}' en Descargas")
+    except Exception as e:
+        print(f"Error al subir el archivo: {e}")
+
+def delete_bucket(bucket_name):
+    s3_client = get_s3_client()
+    
+    try:
+        # Listar y eliminar todos los objetos en el bucket
+        response = s3_client.list_objects_v2(Bucket=bucket_name)
+        if 'Contents' in response:
+            for obj in response['Contents']:
+                s3_client.delete_object(Bucket=bucket_name, Key=obj['Key'])
+        
+        # Eliminar el bucket
+        s3_client.delete_bucket(Bucket=bucket_name)
+        print(f"Bucket '{bucket_name}' eliminado exitosamente.")
         
     except Exception as e:
-        print(f"Error al crear la tabla '{table_name}': {e}")
-
-try:
-    create_table(os.getenv('DYNAMODB_SAMPLES_TABLE_NAME'))
-    create_table(os.getenv('DYNAMODB_ARGS_TABLE_NAME'))
-    print(f"Tablas 'samples_dynamodb' y 'args_dynamodb' creadas exitosamente.")
-
-    # Intenta listar las tablas (aunque no haya ninguna)
-    tables = dynamodb_client.list_tables()
-
-    # Elimina la tabla
-    dynamodb_client.delete_table(TableName='samples_dynamodb')
-    
-    print("¡ÉXITO! La conexión con DynamoDB local funciona.")
-    print(f"Tablas encontradas: {tables['TableNames']}")
-
-except Exception as e:
-    print(f"ERROR: No se pudo conectar a DynamoDB local.")
-    print(f"Detalle: {e}")
+        print(f"Error al eliminar el bucket '{bucket_name}': {e}"
+              )
+if __name__ == "__main__":
+    # upload_file_to_s3_config("config.json")
+    delete_bucket("quantum-cloud-data")

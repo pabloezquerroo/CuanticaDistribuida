@@ -13,9 +13,16 @@ __pycache__/
 *.pyc
 .python-version
 
-# Local testing
+# Local dynamodb
 dynamodb_data
+
+# Local S3
+s3-local/
 
 # Node
 node_modules
 package-lock.json
+
+# Results
+*results.json
+results.parquet
