@@ -20,8 +20,11 @@ def dynamodb_to_python(item):
 with open("results.json", "r") as f:
     data = json.load(f)
 
-# Convertir cada objeto del JSON
-records = [{k: dynamodb_to_python(v) for k, v in obj.items()} for obj in data]
+# Obtener el array Items de la respuesta de DynamoDB
+items = data.get('Items', [])
+
+# Convertir cada objeto del array Items
+records = [{k: dynamodb_to_python(v) for k, v in obj.items()} for obj in items]
 
 # Pasar a DataFrame
 df = pd.DataFrame(records)
