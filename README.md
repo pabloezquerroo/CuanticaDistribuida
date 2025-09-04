@@ -167,25 +167,41 @@ Herramientas y pasos a seguir para la prueba del proyecto en un entorno local.
     docker-compose up
     ```
 
-4.  **Ejecutar los Scripts individualmente:**
-    -   Ejecuta los scripts en el orden correcto, empezando por `args_mixer.py`.
-    ```bash
-    uv run <nombre-script>
-    ```
+5. **Ejecutar pipeline:**
+    -   Utilizamos el framework [serverless](https://www.serverless.com/).
 
-5. **Ejecutar pipeline en local:**
-    -   Instalamos el framework [serverless](https://www.serverless.com/)
-    ```bash
-    npm install serverless-offline --save-dev
-    ```
-    -   Utilizamons el plugin [serverless offline](https://www.serverless.com/plugins/serverless-offline).
-    > Necesario, previamente, lanzar entorno virtual generado por [uv](https://docs.astral.sh/uv/) (```source .venv/bin/activate```).
+    -  Instalamos plugins:
+        - Plugin [serverless offline](https://www.serverless.com/plugins/serverless-offline).
+        ```bash
+        npm install serverless-offline --save-dev
+        ```
+        - Plugin [serverless-s3-local](https://www.serverless.com/plugins/serverless-s3-local) .
+        ```bash
+        npm install serverless-s3-local --save-dev
+        ```
+
+    - Lanzamos entorno virtual generado por [uv](https://docs.astral.sh/uv/) (`source .venv/bin/activate`).
     ```bash
     serverless offline start
     ```
-    -   Invocamos a la función Lambda (nombre definido en serverless.yml)
+
+    - Cargamos archivo `config.json` desde la carpeta `/Descargas` a S3-local con el script `/resources/manage_resources.py`.
     ```bash
-    curl -X POST http://localhost:3000/dev/<nombre-funcion>
+    uv run manage_resources.py
     ```
 
+    -   Invocamos a la función Lambda que da inicio al pipeline.
+    ```bash
+    curl -X POST http://localhost:3000/dev/args_mixer
+    ```
+
+#### Resultados
+Los resultados del pipeline son guardados en una tabla de DynamoDB Local llamada `results_dynamodb`.
+
+En el directorio `resources/results_process/` se maneja todo lo relacionado con la analítica de los resultados. Para poder extraer los datos de la tabla a parquet ejecutamos el siguiente script:
+```bash 
+sh results.sh
+```
+> Esto generará los archivos `results.json` y `results.parquet` con los datos extraidos de la DynamoDB.
 ---
+

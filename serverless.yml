@@ -4,8 +4,6 @@ provider:
   name: aws
   runtime: python3.12
   region: us-east-1
-  environment:
-    IS_OFFLINE: true
   iam:
     role:
       statements:
@@ -17,6 +15,19 @@ provider:
 
 plugins:
   - serverless-offline
+  - serverless-s3-local
+
+custom:
+  s3:
+    host: localhost
+    directory: ./resources/s3-local
+
+resources:
+  Resources:
+    QuantumBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: quantum-cloud-data
 
 functions:
   args_mixer:
