@@ -29,6 +29,8 @@ from boto3.dynamodb.conditions import Key
 import decimal
 
 import logging
+for handler in logging.root.handlers[:]:
+    logging.root.removeHandler(handler)
 logging.basicConfig(level=logging.INFO)
 
 import dotenv
@@ -76,6 +78,7 @@ def get_samples_from_s3(bucket_name, s3_data_path):
         logging.info("Samples loaded from S3.")
         dict_samples["detectors"] = np.array(dict_samples["detectors"])
         dict_samples["observables"] = np.array(dict_samples["observables"])
+
         return dict_samples
     except ClientError as e:
         logging.error(f"Error loading samples from S3: {e}")
@@ -299,13 +302,22 @@ def do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables
         predicted_observables = _decoder.decode(detectors[i])
         b = time.time()
         time_av += (b - a) / NMCs_size
-
         time_max = max(time_max, (b - a))
 
-        logical_error = (observable_mat @ predicted_observables + observables[i]) % 2
+        # # ! DEBUG: Pintar tipos de datos
+        # print("observable_mat type, shape:", type(observable_mat), observable_mat.shape)
+        # print("predicted_observables type, shape:", type(predicted_observables), predicted_observables.shape)
+        # print("observables type2, shape:", type(np.atleast_2d(observables[i])), np.atleast_2d(observables[i]).shape)
+        # print("observable_mat:\n", observable_mat)
+        # print("predicted_observables:\n", predicted_observables)
+        # print("observables[i]:\n", observables[i])
+
+        logical_error = (observable_mat @ predicted_observables + np.atleast_2d(observables[i])) % 2
+        # print("logical_error:\n", logical_error)# ! DEBUG
         if np.any(logical_error == 1):
             Pl += 1 / NMCs_size
             successful_correction_iterations.append(i)
+            logging.info(f"  Error lógico detectado en iteración {i}")
 
     # * Results
     if "error_channel" in arguments["arguments"]:
@@ -382,7 +394,7 @@ def lambda_handler(event, context=None):
         # Detector and observable arrays loaded from S3
         samples_info = get_samples_info_from_dynamodb(id_nmc_batch)
         detectors, observables = get_samples_from_s3(os.getenv('S3_BUCKET_NAME'), samples_info["s3_data_path"]).values()
-        
+
         for arguments in args_list:
             results = do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables, pcm, observable_mat, error_channel)
             

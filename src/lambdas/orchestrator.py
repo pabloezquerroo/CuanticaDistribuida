@@ -1,4 +1,3 @@
-
 """ 
 Lambda que realiza las siguientes funciones:
 1. Recibe el número de lotes de combinaciones de argumentos guardados en DynamoDB (number_of_args_combinations_batches).
@@ -235,7 +234,7 @@ def lambda_handler(event, context):
 
         # Set seed for reproducibility if SEED_MODE is enabled
         seed = None
-        if os.getenv('SEED_MODE'):  
+        if os.getenv('SEED_MODE', '').lower() == 'true':
             seed = int(os.getenv('SEED'))
             logging.info(f"SEED_MODE is enabled. Using seed: {seed}")           
 
@@ -282,19 +281,17 @@ def lambda_handler(event, context):
                 size_batch = simulation_config["NMCs_batch_size"]
 
                 for i in range(1, total_nmcs + 1):
-                    logging.info(f"Simulating {i} of {total_nmcs}...")
+                    # logging.info(f"Simulating {i} of {total_nmcs}...")
                     sampler = circuit.compile_detector_sampler(seed=seed) #TODO: Probar sermilla
                     detectors, observables = sampler.sample(1, separate_observables=True)                    
                 
                     batch_detectors.append(detectors[0].tolist())
                     batch_observables.append(observables[0].tolist())
                     
-                    if i % size_batch == 0:
+                    if i % size_batch == 0:     
+
                         batch_counter = i // size_batch
 
-                        # if batch_counter > 2: # ! Para pruebas locales. Eliminar si se quieren ejecutar todos los lotes.
-                        #     continue
-                        
                         logging.info(f"Saving batch {batch_counter}...")
 
                         # Save samples of the batch.

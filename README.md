@@ -167,51 +167,41 @@ Herramientas y pasos a seguir para la prueba del proyecto en un entorno local.
     docker-compose up
     ```
 
-4.  **Ejecutar los Scripts individualmente:**
-    -   Ejecuta los scripts en el orden correcto, empezando por `args_mixer.py`.
-    ```bash
-    uv run <nombre-script>
-    ```
+5. **Ejecutar pipeline:**
+    -   Utilizamos el framework [serverless](https://www.serverless.com/).
 
-5. **Ejecutar pipeline en local:**
-    -   Instalamos el framework [serverless](https://www.serverless.com/)
-    ```bash
-    npm install serverless-offline --save-dev
-    ```
-    -   Utilizamons el plugin [serverless offline](https://www.serverless.com/plugins/serverless-offline).
-    > Necesario, previamente, lanzar entorno virtual generado por [uv](https://docs.astral.sh/uv/) (```source .venv/bin/activate```).
+    -  Instalamos plugins:
+        - Plugin [serverless offline](https://www.serverless.com/plugins/serverless-offline).
+        ```bash
+        npm install serverless-offline --save-dev
+        ```
+        - Plugin [serverless-s3-local](https://www.serverless.com/plugins/serverless-s3-local) .
+        ```bash
+        npm install serverless-s3-local --save-dev
+        ```
+
+    - Lanzamos entorno virtual generado por [uv](https://docs.astral.sh/uv/) (`source .venv/bin/activate`).
     ```bash
     serverless offline start
     ```
-    -   Invocamos a la función Lambda (nombre definido en serverless.yml)
+
+    - Cargamos archivo `config.json` desde la carpeta `/Descargas` a S3-local con el script `/resources/manage_resources.py`.
     ```bash
-    curl -X POST http://localhost:3000/dev/<nombre-funcion>
+    uv run manage_resources.py
+    ```
+
+    -   Invocamos a la función Lambda que da inicio al pipeline.
+    ```bash
+    curl -X POST http://localhost:3000/dev/args_mixer
     ```
 
 #### Resultados
-En el directorio `resources/results_process/` se maneja todo lo relacionado con la analítica de los resultados.
-1. **Configurar AWS CLI**
-    ```bash
-    aws configure --profile blackblaze
-    ```
-    - AWS Access Key ID: La Application Key ID de Backblaze.
-    - AWS Secret Access Key: La Application Key Secret de Backblaze.
-    - Region: Elige la región correcta de tu bucket de Backblaze (por ejemplo, eu-central-003)
-2. **Exportar datos de DynamoDB local en `JSON`:**
-    ```bash
-    aws dynamodb scan \
-    --table-name samples_dynamodb \
-    --endpoint-url http://localhost:8001 \
-    --no-paginate --output json \
-    --query "Items" > resources/results_process/results.json
-    ```
-3. **Convertir `JSON` en `parquet`:**
-    ```bash
-    uv run resources/results_process/json_to_parquet.py
-    ```
-4. **Importar `parquet` a S3(backblaze)**
-    ```bash
-    aws s3 cp results.parquet s3://quantum-cloud-data/ --profile backblaze --endpoint-url https://s3.eu-central-003.backblazeb2.com
-    ```
+Los resultados del pipeline son guardados en una tabla de DynamoDB Local llamada `results_dynamodb`.
+
+En el directorio `resources/results_process/` se maneja todo lo relacionado con la analítica de los resultados. Para poder extraer los datos de la tabla a parquet ejecutamos el siguiente script:
+```bash 
+sh results.sh
+```
+> Esto generará los archivos `results.json` y `results.parquet` con los datos extraidos de la DynamoDB.
 ---
 
