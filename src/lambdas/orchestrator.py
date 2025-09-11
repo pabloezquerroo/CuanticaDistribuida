@@ -236,7 +236,7 @@ def lambda_handler(event, context):
         seed = None
         if os.getenv('SEED_MODE', '').lower() == 'true':
             seed = int(os.getenv('SEED'))
-            logging.info(f"SEED_MODE is enabled. Using seed: {seed}")           
+            logging.info(f"SEED_MODE is enabled. Initial seed: {seed}")           
 
         if "body" in event: # if the event comes from http (Local testing)
             received_event = json.loads(event["body"])
@@ -282,7 +282,7 @@ def lambda_handler(event, context):
 
                 for i in range(1, total_nmcs + 1):
                     # logging.info(f"Simulating {i} of {total_nmcs}...")
-                    sampler = circuit.compile_detector_sampler(seed=seed) #TODO: Probar sermilla
+                    sampler = circuit.compile_detector_sampler(seed=seed+i) # Increment seed for each simulation if seed is set
                     detectors, observables = sampler.sample(1, separate_observables=True)                    
                 
                     batch_detectors.append(detectors[0].tolist())
