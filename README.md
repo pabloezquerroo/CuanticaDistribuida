@@ -185,7 +185,7 @@ Herramientas y pasos a seguir para la prueba del proyecto en un entorno local.
     serverless offline start
     ```
 
-    - Cargamos archivo `config.json` desde la carpeta `/Descargas` a S3-local con el script `/resources/manage_resources.py`.
+    - Cargamos archivo `config.json` ubicado en la carpeta `/resources` a S3-local con el script `/resources/manage_resources.py`.
     ```bash
     uv run manage_resources.py
     ```

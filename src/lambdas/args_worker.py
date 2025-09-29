@@ -145,6 +145,7 @@ def get_samples_info_from_dynamodb(id_nmc_batch):
         raise RuntimeError("Error loading samples info from DynamoDB") from e    
 
 def replace_decimals(obj):
+    """Convert decimal.Decimal instances to int or float."""
     if isinstance(obj, list):
         for i in range(len(obj)):
             obj[i] = replace_decimals(obj[i])
@@ -158,6 +159,21 @@ def replace_decimals(obj):
             return int(obj)
         else:
             return float(obj)
+    else:
+        return obj
+    
+def convert_to_dynamodb_format(obj):
+    """Convert data types to DynamoDB compatible format when saving."""
+    if isinstance(obj, list):
+        return [convert_to_dynamodb_format(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {k: convert_to_dynamodb_format(v) for k, v in obj.items()}
+    elif isinstance(obj, (int, float)):
+        return decimal.Decimal(str(obj))
+    elif isinstance(obj, np.integer):
+        return decimal.Decimal(str(int(obj)))
+    elif isinstance(obj, np.floating):
+        return decimal.Decimal(str(float(obj)))
     else:
         return obj
 
@@ -271,20 +287,16 @@ def create_results_table_if_not_exists(dynamodb, table_name):
 
 def do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables, pcm, observable_mat, error_channel):
 
-    # If there is the argument "error_channel==dem_error_channel", it is hardcoded to matrices.priors
-    if( "error_channel" in arguments["arguments"] and arguments["arguments"]["error_channel"] == "dem_error_channel" ):
-        arguments["arguments"]["error_channel"] = error_channel
-       
     # * Initialize decoders
     if arguments["decoder_type"] == "BP":
         logging.info(f"BP decoder initialized")
-        _decoder = BpDecoder(pcm, error_rate=float(p), **arguments["arguments"])
+        _decoder = BpDecoder(pcm, error_rate=float(p), error_channel=error_channel, **arguments["arguments"])
     elif arguments["decoder_type"] == "BPLSD":
         logging.info(f"BPLSD decoder initialized")
-        _decoder = BpLsdDecoder(pcm, error_rate=float(p), **arguments["arguments"])
+        _decoder = BpLsdDecoder(pcm, error_rate=float(p), error_channel=error_channel, **arguments["arguments"])
     elif arguments["decoder_type"] == "BPOSD":
         logging.info(f"BPOSD decoder initialized")
-        _decoder = BpOsdDecoder(pcm, error_rate=float(p), **arguments["arguments"])
+        _decoder = BpOsdDecoder(pcm, error_rate=float(p), error_channel=error_channel, **arguments["arguments"])
     else:
         raise ValueError(f"Decoder type {arguments["decoder_type"]} not supported")
 
@@ -319,21 +331,17 @@ def do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables
             successful_correction_iterations.append(i)
             logging.info(f"  Error lógico detectado en iteración {i}")
 
-    # * Results
-    if "error_channel" in arguments["arguments"]:
-        arguments["arguments"]["error_channel"] = "dem_error_channel"
-
     results = {
         "id_nmc_batch": id_nmc_batch, # ID of the NMC batch: nmc_{code}_{p(0c001)}_{nmc_batch_counter}
-        "id_arguments": arguments["id_arguments"], # ID of the arguments used
+        "id_arguments": arguments["id_arguments"], # ID of the arguments used: Decoder_{id_automorphism}
         "codeConfig": codeConfig, # Possible codes: 72, 90, 108, 144, 288, 784
-        "p": decimal.Decimal(str(p)), # Error probability
+        "error_rate": p, # Error probability
         "decoder_type": arguments["decoder_type"], # Type of decoder
         "arguments": arguments, # Arguments for the decoder
-        "Pl": decimal.Decimal(str(Pl)), # Logical error detection probability in the batch
-        "time_av": decimal.Decimal(str(time_av)), # Average decoding time in the batch
-        "time_max": decimal.Decimal(str(time_max)), # Maximum decoding time in the batch
-        "successful_correction_iterations": successful_correction_iterations # Iterations where the decoder successfully corrected the error
+        "Pl": Pl, # Logical error detection probability in the batch
+        "time_av": time_av, # Average decoding time in the batch
+        "time_max": time_max, # Maximum decoding time in the batch
+        "corrected_iterations": successful_correction_iterations # Iterations where the decoder successfully corrected the error
     }
     return results
 
@@ -398,6 +406,8 @@ def lambda_handler(event, context=None):
         for arguments in args_list:
             results = do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables, pcm, observable_mat, error_channel)
             
+            results = convert_to_dynamodb_format(results)
+
             # * Save results to DynamoDB
             if os.getenv('DYNAMODB_RESULTS_TABLE_NAME') is None:
                 raise ValueError("DYNAMODB_RESULTS_TABLE_NAME is not defined in environment variables")

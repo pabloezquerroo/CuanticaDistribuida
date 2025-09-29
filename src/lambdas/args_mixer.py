@@ -11,6 +11,7 @@ import boto3
 from botocore.exceptions import ClientError
 import math
 import requests
+from decimal import Decimal
 
 import logging
 for handler in logging.root.handlers[:]:
@@ -25,17 +26,7 @@ def generate_args():
         {
             "id_arguments": 0,
             "decoder_type": "BP",
-            "arguments": {"max_iter":100, "bp_method":"product_sum", "error_channel":"dem_error_channel"}
-        }, 
-        {
-            "id_arguments": 1,
-            "decoder_type": "BPLSD",
-            "arguments": {"max_iter":100, "bp_method":"product_sum", "osd_method":"lsd_cs", "osd_order":2}
-        },
-        {
-            "id_arguments": 2,
-            "decoder_type": "BPOSD",
-            "arguments": {"max_iter":100, "bp_method":"product_sum", "schedule":"parallel", "osd_method":"osd_0"}
+            "arguments": {"max_iter": 100, "ms_scaling_factor": Decimal('0.9'), "bp_method": "minimum_sum"}
         }
     ]
     return args_list
