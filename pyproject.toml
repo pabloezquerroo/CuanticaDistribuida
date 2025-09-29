@@ -1,0 +1,21 @@
+[project]
+name = "cuanticadistribuida"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "autdec",
+    "boto3>=1.38.46",
+    "dotenv>=0.9.9",
+    "fastparquet>=2024.11.0",
+    "ldpc==2.1.2",
+    "numba>=0.62.0",
+    "pandas>=2.3.1",
+    "pyarrow>=21.0.0",
+    "requests>=2.32.4",
+    "setuptools>=80.9.0",
+]
+
+[tool.uv.sources]
+autdec = { git = "https://github.com/hsayginel/autdec.git" }

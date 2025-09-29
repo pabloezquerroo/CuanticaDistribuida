@@ -5,7 +5,7 @@ from scipy import sparse
 from typing import List, FrozenSet, Dict
 from functools import reduce
 from scipy.sparse import identity, hstack, kron, csr_matrix
-from utils import row_echelon, rank, kernel, compute_code_distance, inverse, int2bin
+from src.libs.utils import row_echelon, rank, kernel, compute_code_distance, inverse, int2bin
 from collections import deque
 
 
@@ -870,12 +870,12 @@ def save_sparse_matrices(A_list, B_list):
 
 def select_configuration(option):
     configurations = {
-        "72": {"ell": 6, "m": 6, "a": [3, 1, 2], "b": [3, 1, 2]},
-        "90": {"ell": 15, "m": 3, "a": [9, 1, 2], "b": [0, 2, 7]},
-        "108": {"ell": 9, "m": 6, "a": [3, 1, 2], "b": [3, 1, 2]},
-        "144": {"ell": 12, "m": 6, "a": [3, 1, 2], "b": [3, 1, 2]},
-        "288": {"ell": 12, "m": 12, "a": [3, 2, 7], "b": [3, 1, 2]},
-        "784": {"ell": 28, "m": 14, "a": [26, 6, 8], "b": [7, 9, 20]},
+        72: {"ell": 6, "m": 6, "a": [3, 1, 2], "b": [3, 1, 2], "d": 6},
+        90: {"ell": 15, "m": 3, "a": [9, 1, 2], "b": [0, 2, 7], "d": 10},
+        108: {"ell": 9, "m": 6, "a": [3, 1, 2], "b": [3, 1, 2], "d": 10},
+        144: {"ell": 12, "m": 6, "a": [3, 1, 2], "b": [3, 1, 2], "d": 12},
+        288: {"ell": 12, "m": 12, "a": [3, 2, 7], "b": [3, 1, 2], "d": 18},
+        784: {"ell": 28, "m": 14, "a": [26, 6, 8], "b": [7, 9, 20], "d": 24},
     }
 
     if option not in configurations:
