@@ -54,13 +54,13 @@ def put_object(s3_client, bucket_name, object_key, data):
 
 def upload_file_to_s3_config(filename):
     """
-    Sube un archivo desde la carpeta de descargas a la carpeta config del bucket S3
+    Sube un archivo desde la carpeta actual a la carpeta config del bucket S3
     
     Args:
-        filename (str): Nombre del archivo en la carpeta de descargas
+        filename (str): Nombre del archivo a subir
     """
-    downloads_path = os.path.expanduser("~/Downloads")
-    file_path = os.path.join(downloads_path, filename)
+    # El archivo está en la carpeta resources
+    file_path = os.path.join(os.path.dirname(__file__), filename)
     
     try:
         s3_client = get_s3_client()
@@ -81,7 +81,7 @@ def upload_file_to_s3_config(filename):
         print(f"Archivo '{filename}' subido exitosamente a config/{filename}")
         
     except FileNotFoundError:
-        print(f"Error: No se encontró el archivo '{filename}' en Descargas")
+        print(f"Error: No se encontró el archivo '{filename}' en la ruta '{os.path.dirname(__file__)}'")
     except Exception as e:
         print(f"Error al subir el archivo: {e}")
 
@@ -89,12 +89,20 @@ def clean_s3_bucket(bucket_name):
     s3_client = get_s3_client()
     
     try:
-        # Listar y eliminar todos los objetos en el bucket
+        # Listar todos los objetos en el bucket
         response = s3_client.list_objects_v2(Bucket=bucket_name)
         if 'Contents' in response:
+            deleted_count = 0
             for obj in response['Contents']:
-                s3_client.delete_object(Bucket=bucket_name, Key=obj['Key'])
-        print(f"Bucket '{bucket_name}' limpiado exitosamente.")
+                # Excluir objetos que estén en el directorio automorphisms/
+                if not obj['Key'].startswith('automorphisms/'):
+                    s3_client.delete_object(Bucket=bucket_name, Key=obj['Key'])
+                    deleted_count += 1
+            
+            print(f"Bucket '{bucket_name}' limpiado exitosamente.")
+            print(f"Se eliminaron {deleted_count} objetos (excluyendo directorio 'automorphisms/').")
+        else:
+            print(f"No hay objetos para eliminar en el bucket '{bucket_name}'.")
         
     except Exception as e:
         print(f"Error al limpiar el bucket '{bucket_name}': {e}")

@@ -1,0 +1,14 @@
+ {
+    "codeConfig": [
+        144
+    ],
+    "NMCs": [
+        1000
+    ],
+    "p": [
+        0.003
+    ],
+    "number_of_automorphisms": 6,
+    "NMCs_batch_size": 100,
+    "args_batch_size": 1
+}

@@ -7,7 +7,7 @@ Repositorio de Trabajo de Fin de Máster sobre corrección de errores cuánticos
 ## Índice
 
 - [Documentación y Recursos](#documentación-y-recursos)
-- [Código de referencia el cual se busca hacer distribuido](#código-de-referencia-el-cual-se-busca-hacer-distribuido)
+- [Código de referencia el cual se busca hacer distribuido](#código-de-referencia-el-cual-se-busca-distribuir)
 - [Arquitectura Distribuida](#arquitectura-distribuida)
 - [Ejecución y pruebas](#ejecución-y-pruebas)
 

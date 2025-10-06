@@ -16,6 +16,8 @@ import os
 import json
 import numpy as np  
 import time  
+import io
+import pickle
 
 from ldpc import BpDecoder  
 from ldpc.bplsd_decoder import BpLsdDecoder
@@ -56,6 +58,39 @@ def get_connection_s3():
         aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
     )
 
+def get_automorphism_from_s3(auto_id, error_rate):
+    """
+    Download a specific automorphism from S3
+    """
+    s3 = get_connection_s3()
+    error_rate_str = f"{error_rate:.6f}".rstrip('0').rstrip('.')
+    
+    automorphism_path = os.getenv('S3_AUTOMORPHISMS_PATH')
+    s3_path = f"{automorphism_path}{error_rate_str}/auto_{auto_id}/data.pkl"
+    logging.info(f"Downloading automorphism from S3: {s3_path}")
+    buffer = io.BytesIO()
+    try:
+        s3.download_fileobj(
+            os.getenv('S3_BUCKET_NAME'),
+            s3_path,
+            buffer
+        )
+        buffer.seek(0)
+        data = pickle.load(buffer)
+
+        # ! DEBUG: Pintar tipos de datos
+        # logging.info(f"Type of data['ensemble']: {type(data['ensemble'])}, length: {len(data['ensemble'])}")
+        # logging.info(f"Type of data['priors']: {type(data['priors'])}, length: {len(data['priors'])}")
+        # logging.info(f"Type of data['row_perm']: {type(data['row_perm'])}, length: {len(data['row_perm'])}")
+        # logging.info(f"PCM (ensemble) shape: {data['ensemble'].shape}")
+        # logging.info(f"Priors shape: {data['priors'].shape}")
+        # logging.info(f"Row_perm shape: {data['row_perm'].shape}")
+
+        return data['ensemble'], data['priors'], data['row_perm']
+    except ClientError as e:
+        logging.error(f"Error downloading automorphism {auto_id}: {str(e)}")
+        return None, None, None
+    
 def get_samples_from_s3(bucket_name, s3_data_path):
     """Retrieve a set of samples from an S3 bucket.
 
@@ -145,6 +180,7 @@ def get_samples_info_from_dynamodb(id_nmc_batch):
         raise RuntimeError("Error loading samples info from DynamoDB") from e    
 
 def replace_decimals(obj):
+    """Convert decimal.Decimal instances to int or float."""
     if isinstance(obj, list):
         for i in range(len(obj)):
             obj[i] = replace_decimals(obj[i])
@@ -158,6 +194,21 @@ def replace_decimals(obj):
             return int(obj)
         else:
             return float(obj)
+    else:
+        return obj
+    
+def convert_to_dynamodb_format(obj):
+    """Convert data types to DynamoDB compatible format when saving."""
+    if isinstance(obj, list):
+        return [convert_to_dynamodb_format(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {k: convert_to_dynamodb_format(v) for k, v in obj.items()}
+    elif isinstance(obj, (int, float)):
+        return decimal.Decimal(str(obj))
+    elif isinstance(obj, np.integer):
+        return decimal.Decimal(str(int(obj)))
+    elif isinstance(obj, np.floating):
+        return decimal.Decimal(str(float(obj)))
     else:
         return obj
 
@@ -250,7 +301,7 @@ def create_results_table_if_not_exists(dynamodb, table_name):
                     ],
                     AttributeDefinitions=[
                         {'AttributeName': 'id_nmc_batch', 'AttributeType': 'S'},
-                        {'AttributeName': 'id_arguments', 'AttributeType': 'N'}
+                        {'AttributeName': 'id_arguments', 'AttributeType': 'S'}
                     ],
                     ProvisionedThroughput={
                         'ReadCapacityUnits': 5,
@@ -269,22 +320,20 @@ def create_results_table_if_not_exists(dynamodb, table_name):
 
 #endregion
 
+# AUTOMORFISMOS
+# def do_simulation(arguments, codeConfig, p, id_nmc_batch, row_perm, detectors, observables, pcm, observable_mat, error_channel):
 def do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables, pcm, observable_mat, error_channel):
-
-    # If there is the argument "error_channel==dem_error_channel", it is hardcoded to matrices.priors
-    if( "error_channel" in arguments["arguments"] and arguments["arguments"]["error_channel"] == "dem_error_channel" ):
-        arguments["arguments"]["error_channel"] = error_channel
-       
+    
     # * Initialize decoders
     if arguments["decoder_type"] == "BP":
         logging.info(f"BP decoder initialized")
-        _decoder = BpDecoder(pcm, error_rate=float(p), **arguments["arguments"])
+        _decoder = BpDecoder(pcm, error_rate=float(p), error_channel=error_channel, **arguments["arguments"])
     elif arguments["decoder_type"] == "BPLSD":
         logging.info(f"BPLSD decoder initialized")
-        _decoder = BpLsdDecoder(pcm, error_rate=float(p), **arguments["arguments"])
+        _decoder = BpLsdDecoder(pcm, error_rate=float(p), error_channel=error_channel, **arguments["arguments"])
     elif arguments["decoder_type"] == "BPOSD":
         logging.info(f"BPOSD decoder initialized")
-        _decoder = BpOsdDecoder(pcm, error_rate=float(p), **arguments["arguments"])
+        _decoder = BpOsdDecoder(pcm, error_rate=float(p), error_channel=error_channel, **arguments["arguments"])
     else:
         raise ValueError(f"Decoder type {arguments["decoder_type"]} not supported")
 
@@ -292,13 +341,21 @@ def do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables
     Pl = 0
     time_av = 0
     time_max = 0
-    successful_correction_iterations = []
+    corrected_iterations = []
     
     # * Run Monte Carlo trials
     NMCs_size = len(detectors)
     logging.info(f"Running {NMCs_size} Monte Carlo trials")
+
+    # ! DEBUG: Pintar shapes de matrices
+    # logging.info(f"PCM shape: {pcm.shape}")
+    # logging.info(f"observable_mat shape: {observable_mat.shape}")
+    # logging.info(f"Detector shape: {detectors[0].shape}")
+
     for i in range(NMCs_size):
         a = time.time()
+        # AUTOMORFISMOS
+        # predicted_observables = _decoder.decode(row_perm @ detectors[i] % 2)
         predicted_observables = _decoder.decode(detectors[i])
         b = time.time()
         time_av += (b - a) / NMCs_size
@@ -313,27 +370,36 @@ def do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables
         # print("observables[i]:\n", observables[i])
 
         logical_error = (observable_mat @ predicted_observables + np.atleast_2d(observables[i])) % 2
-        # print("logical_error:\n", logical_error)# ! DEBUG
+       
+        # ! DEBUG
+        # logging.info(f"Iteration {i}:")
+        # logging.info(f"  predicted_observables: {predicted_observables}")
+        # logging.info(f"  observables[i]: {observables[i]}")
+        # logging.info(f"  logical_error: {logical_error}")
+        # logging.info(f"  logical_error shape: {logical_error.shape}")
+        # syndrome = row_perm @ detectors[i] % 2
+        # logging.info(f"Syndrome: {syndrome}")
+        # logging.info(f"Syndrome shape: {syndrome.shape}")
+        # logging.info(f"Syndrome sum (should not be 0): {np.sum(syndrome)}")
+        
         if np.any(logical_error == 1):
             Pl += 1 / NMCs_size
-            successful_correction_iterations.append(i)
-            logging.info(f"  Error lógico detectado en iteración {i}")
-
+            corrected_iterations.append(i)
+            logging.info(f"  Error lógico corregido en iteración {i}")
+    
     # * Results
-    if "error_channel" in arguments["arguments"]:
-        arguments["arguments"]["error_channel"] = "dem_error_channel"
-
     results = {
         "id_nmc_batch": id_nmc_batch, # ID of the NMC batch: nmc_{code}_{p(0c001)}_{nmc_batch_counter}
-        "id_arguments": arguments["id_arguments"], # ID of the arguments used
+        "id_arguments": arguments["id_arguments"], # ID of the arguments used: Decoder_{id_automorphism}
+        "id_automorphism": arguments["id_automorphism"], # ID of the automorphism used: {id_automorphism}
         "codeConfig": codeConfig, # Possible codes: 72, 90, 108, 144, 288, 784
-        "p": decimal.Decimal(str(p)), # Error probability
+        "error_rate": p, # Error probability
         "decoder_type": arguments["decoder_type"], # Type of decoder
         "arguments": arguments, # Arguments for the decoder
-        "Pl": decimal.Decimal(str(Pl)), # Logical error detection probability in the batch
-        "time_av": decimal.Decimal(str(time_av)), # Average decoding time in the batch
-        "time_max": decimal.Decimal(str(time_max)), # Maximum decoding time in the batch
-        "successful_correction_iterations": successful_correction_iterations # Iterations where the decoder successfully corrected the error
+        "Pl": Pl, # Logical error detection probability in the batch
+        "time_av": time_av, # Average decoding time in the batch
+        "time_max": time_max, # Maximum decoding time in the batch
+        "corrected_iterations": corrected_iterations # Iterations where the decoder successfully corrected the error
     }
     return results
 
@@ -396,7 +462,15 @@ def lambda_handler(event, context=None):
         detectors, observables = get_samples_from_s3(os.getenv('S3_BUCKET_NAME'), samples_info["s3_data_path"]).values()
 
         for arguments in args_list:
+            # Leer esta informacion de S3
+            
+            # AUTOMORFISMOS
+            # pcm, error_channel, row_perm = get_automorphism_from_s3(arguments["id_automorphism"], error_rate=p)
+            # results = do_simulation(arguments, codeConfig, p, id_nmc_batch, row_perm, detectors, observables, pcm, observable_mat, error_channel)
+
             results = do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables, pcm, observable_mat, error_channel)
+
+            results = convert_to_dynamodb_format(results)
             
             # * Save results to DynamoDB
             if os.getenv('DYNAMODB_RESULTS_TABLE_NAME') is None:
@@ -418,6 +492,7 @@ def lambda_handler(event, context=None):
                 logging.error(f"Error saving results to DynamoDB: {e}")
                 raise RuntimeError("Error saving results to DynamoDB") from e
 
+        # * Update workers_completed in samples_dynamodb
         if add_workers_completed_to_dynamodb(dynamodb, id_nmc_batch) >= number_of_args_combinations_batches:
             delete_samples_from_s3(os.getenv('S3_BUCKET_NAME'), samples_info["s3_data_path"])
 
@@ -425,14 +500,3 @@ def lambda_handler(event, context=None):
     except Exception as e:
         logging.error(f"Error in args_worker lambda_handler: {e}")
         return {"status": "failed"}
-# if __name__ == "__main__":
-#     id_nmc_batch = "nmc_90_0c001_2" # nmc_{code}_{p}_{nmc_batch_counter}
-#     number_of_args_combinations_batches = 1
-#     id_batch_arguments = 0
-#     try:
-#         logging.info(f"Executing args_worker.py locally...")
-#         lambda_handler({"id_nmc_batch": id_nmc_batch, "number_of_args_combinations_batches": number_of_args_combinations_batches, "id_batch_arguments": id_batch_arguments}, None)
-#         logging.info("Local execution finished.")
-#     except Exception as e:
-#         logging.error(f"Error in args_worker.py: {e}")
-#         raise RuntimeError("Error in args_worker.py") from e
