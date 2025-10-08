@@ -27,8 +27,5 @@ package-lock.json
 *results.json
 *results.parquet
 
-# Generation of automorphisms
-**/automorphisms
-
 # Experiments
-**/experiments
+experiments/

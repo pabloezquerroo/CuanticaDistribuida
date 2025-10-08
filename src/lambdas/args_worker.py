@@ -320,10 +320,10 @@ def create_results_table_if_not_exists(dynamodb, table_name):
 
 #endregion
 
-# AUTOMORFISMOS
-# def do_simulation(arguments, codeConfig, p, id_nmc_batch, row_perm, detectors, observables, pcm, observable_mat, error_channel):
-def do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables, pcm, observable_mat, error_channel):
     
+# def do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables, pcm, observable_mat, error_channel):
+# AUTOMORFISMOS
+def do_simulation(arguments, codeConfig, p, id_nmc_batch, row_perm, detectors, observables, pcm, observable_mat, error_channel):
     # * Initialize decoders
     if arguments["decoder_type"] == "BP":
         logging.info(f"BP decoder initialized")
@@ -341,7 +341,7 @@ def do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables
     Pl = 0
     time_av = 0
     time_max = 0
-    corrected_iterations = []
+    corrected_patterns = []
     
     # * Run Monte Carlo trials
     NMCs_size = len(detectors)
@@ -354,26 +354,26 @@ def do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables
 
     for i in range(NMCs_size):
         a = time.time()
+        # predicted_error = _decoder.decode(detectors[i])
         # AUTOMORFISMOS
-        # predicted_observables = _decoder.decode(row_perm @ detectors[i] % 2)
-        predicted_observables = _decoder.decode(detectors[i])
+        predicted_error = _decoder.decode(row_perm @ detectors[i] % 2)
         b = time.time()
         time_av += (b - a) / NMCs_size
         time_max = max(time_max, (b - a))
 
         # # ! DEBUG: Pintar tipos de datos
         # print("observable_mat type, shape:", type(observable_mat), observable_mat.shape)
-        # print("predicted_observables type, shape:", type(predicted_observables), predicted_observables.shape)
+        # print("predicted_error type, shape:", type(predicted_error), predicted_error.shape)
         # print("observables type2, shape:", type(np.atleast_2d(observables[i])), np.atleast_2d(observables[i]).shape)
         # print("observable_mat:\n", observable_mat)
-        # print("predicted_observables:\n", predicted_observables)
+        # print("predicted_error:\n", predicted_error)
         # print("observables[i]:\n", observables[i])
 
-        logical_error = (observable_mat @ predicted_observables + np.atleast_2d(observables[i])) % 2
+        logical_error = (observable_mat @ predicted_error + np.atleast_2d(observables[i])) % 2
        
         # ! DEBUG
-        # logging.info(f"Iteration {i}:")
-        # logging.info(f"  predicted_observables: {predicted_observables}")
+        # logging.info(f"Patron {i}:")
+        # logging.info(f"  predicted_error: {predicted_error}")
         # logging.info(f"  observables[i]: {observables[i]}")
         # logging.info(f"  logical_error: {logical_error}")
         # logging.info(f"  logical_error shape: {logical_error.shape}")
@@ -384,8 +384,8 @@ def do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables
         
         if np.any(logical_error == 1):
             Pl += 1 / NMCs_size
-            corrected_iterations.append(i)
-            logging.info(f"  Error lógico corregido en iteración {i}")
+            corrected_patterns.append(i)
+            logging.info(f"  Error lógico corregido en patrón {i}")
     
     # * Results
     results = {
@@ -399,7 +399,7 @@ def do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables
         "Pl": Pl, # Logical error detection probability in the batch
         "time_av": time_av, # Average decoding time in the batch
         "time_max": time_max, # Maximum decoding time in the batch
-        "corrected_iterations": corrected_iterations # Iterations where the decoder successfully corrected the error
+        "corrected_patterns": corrected_patterns # Patterns where the decoder successfully corrected the error
     }
     return results
 
@@ -441,7 +441,7 @@ def lambda_handler(event, context=None):
         # pcm = sparse.csc_matrix(code.hx, dtype=np.uint8)
 
         # * Build circuit and detector error model
-        circuit = build_circuit(code, A_list, B_list, p=p, num_repeat=d, z_basis=False, use_both=False)
+        circuit = build_circuit(code, A_list, B_list, p=p, num_repeat=d, z_basis=True, use_both=False)
         logging.info(f"Circuit built")
         dem = circuit.detector_error_model()
         logging.info(f"Detector error model built")
@@ -464,11 +464,11 @@ def lambda_handler(event, context=None):
         for arguments in args_list:
             # Leer esta informacion de S3
             
+            # results = do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables, pcm, observable_mat, error_channel)
             # AUTOMORFISMOS
-            # pcm, error_channel, row_perm = get_automorphism_from_s3(arguments["id_automorphism"], error_rate=p)
-            # results = do_simulation(arguments, codeConfig, p, id_nmc_batch, row_perm, detectors, observables, pcm, observable_mat, error_channel)
+            pcm, error_channel, row_perm = get_automorphism_from_s3(arguments["id_automorphism"], error_rate=p)
+            results = do_simulation(arguments, codeConfig, p, id_nmc_batch, row_perm, detectors, observables, pcm, observable_mat, error_channel)
 
-            results = do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables, pcm, observable_mat, error_channel)
 
             results = convert_to_dynamodb_format(results)
             

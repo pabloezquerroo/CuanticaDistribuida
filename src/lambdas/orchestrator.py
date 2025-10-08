@@ -271,7 +271,7 @@ def lambda_handler(event, context):
                 code, A_list, B_list = create_bivariate_bicycle_codes(ell, m, A_x_pows, A_y_pows, B_x_pows, B_y_pows)
                 
                 # Build circuit
-                circuit = build_circuit(code, A_list, B_list, p=p_val, num_repeat=d, z_basis=False, use_both=False)
+                circuit = build_circuit(code, A_list, B_list, p=p_val, num_repeat=d, z_basis=True, use_both=False)
 
                 # Initialize lists for storing results
                 batch_detectors = []

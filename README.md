@@ -29,6 +29,7 @@ Repositorio de Trabajo de Fin de Máster sobre corrección de errores cuánticos
   - [Stim (generación de ruido)](https://github.com/quantumlib/Stim)
   - [LDPC decoders](https://software.roffe.eu/ldpc/)
   - [LDPC GitHub](https://github.com/quantumgizmos/ldpc?tab=readme-ov-file)
+  - [AutDEC](https://github.com/hsayginel/autdec)
 
 ---
 
@@ -59,17 +60,17 @@ if ldpc_v2 is True:
 Las decodificaciones son:
 
 ```python
-predicted_observables = _bp.decode(detectors[0])
-predicted_observables_lsd = _bplsd.decode(detectors[0])
-predicted_observables_osd = _bposd.decode(detectors[0])
+predicted_error = _bp.decode(detectors[0])
+predicted_error_lsd = _bplsd.decode(detectors[0])
+predicted_error_osd = _bposd.decode(detectors[0])
 ```
 
 Y la comprobación de los errores lógicos es:
 
 ```python
-logical_error = (observable_mat @ predicted_observables + observables) % 2
-logical_error_lsd = (observable_mat @ predicted_observables_lsd + observables) % 2
-logical_error_osd = (observable_mat @ predicted_observables_osd + observables) % 2
+logical_error = (observable_mat @ predicted_error + observables) % 2
+logical_error_lsd = (observable_mat @ predicted_error_lsd + observables) % 2
+logical_error_osd = (observable_mat @ predicted_error_osd + observables) % 2
 ```
 
 Cuando se produce un error es interesante saber si el algoritmo ha convergido o no para saber si erróneamente el decodificador piensa que ha sido capaz de eliminar el ruido.  

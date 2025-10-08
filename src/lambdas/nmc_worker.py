@@ -20,7 +20,6 @@ logging.basicConfig(level=logging.INFO)
 import dotenv
 # dotenv.load_dotenv()
 
-
 #region Lambda Functions
 # def get_connection_lambda():
 #     return boto3.client('lambda',

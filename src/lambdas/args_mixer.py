@@ -21,46 +21,39 @@ logging.basicConfig(level=logging.INFO)
 import dotenv
 
 # TODO: Realizar lógica que genere todas las posibles combinaciones de argumentos a partir de una lista de argumentos generales y específicos para los decodificadores
-def generate_args(config):
-    args_list = [
-        {
-            "id_automorphism": 0,
-            "id_arguments": "DUMMY",
-            "decoder_type": "BP",
-            "arguments": {"max_iter": 100, "ms_scaling_factor": Decimal('0.9'), "bp_method": "minimum_sum"}
-        }, 
-        # {
-        #     "id_arguments": 0,
-        #     "decoder_type": "BP",
-        #     "arguments": {"max_iter":100, "bp_method":"product_sum", "error_channel":"dem_error_channel"}
-        # }, 
-        # {
-        #     "id_arguments": 1,
-        #     "decoder_type": "BPLSD",
-        #     "arguments": {"max_iter":100, "bp_method":"product_sum", "osd_method":"lsd_cs", "osd_order":2}
-        # },
-        # {
-        #     "id_arguments": 2,
-        #     "decoder_type": "BPOSD",
-        #     "arguments": {"max_iter":100, "bp_method":"product_sum", "schedule":"parallel", "osd_method":"osd_0"}
-        # }
-    ]
-    return args_list
+# def generate_args(config):
+#         # {
+#         #     "id_arguments": 0,
+#         #     "decoder_type": "BP",
+#         #     "arguments": {"max_iter":100, "bp_method":"product_sum", "error_channel":"dem_error_channel"}
+#         # }, 
+#         # {
+#         #     "id_arguments": 1,
+#         #     "decoder_type": "BPLSD",
+#         #     "arguments": {"max_iter":100, "bp_method":"product_sum", "osd_method":"lsd_cs", "osd_order":2}
+#         # },
+#         # {
+#         #     "id_arguments": 2,
+#         #     "decoder_type": "BPOSD",
+#         #     "arguments": {"max_iter":100, "bp_method":"product_sum", "schedule":"parallel", "osd_method":"osd_0"}
+#         # }
+#     ]
+#     return args_list
 
 # AUTOMORFISMOS
-# def generate_args(config):
-#     number_of_automorphisms = config['number_of_automorphisms']
-#     args_list = []
-#     for i in range(number_of_automorphisms):
-#         args_list.append(
-#             {
-#                 "id_automorphism": i,
-#                 "id_arguments": f"BP_{i}",
-#                 "decoder_type": "BP",
-#                 "arguments": {"max_iter": 100, "ms_scaling_factor": Decimal('0.9'), "bp_method": "minimum_sum"}
-#             }
-#         )
-#     return args_list
+def generate_args(config):
+    number_of_automorphisms = config['number_of_automorphisms']
+    args_list = []
+    for i in range(number_of_automorphisms):
+        args_list.append(
+            {
+                "id_automorphism": i,
+                "id_arguments": f"BP_{i}",
+                "decoder_type": "BP",
+                "arguments": {"max_iter": 100, "ms_scaling_factor": Decimal('0.9'), "bp_method": "minimum_sum"}
+            }
+        )
+    return args_list
 
 #region S3 Functions
 def get_connection_s3():
