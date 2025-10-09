@@ -1,7 +1,7 @@
 """ 
 Lambda que realiza las siguientes funciones:
 1. Recibe el número de lotes de combinaciones de argumentos guardados en DynamoDB (number_of_args_combinations_batches).
-2. Lee de S3 el archivo de S3 (código, p, NMCs, NMC_batch_size, args_batch_size).
+2. Lee de S3 el archivo de S3 (codeConfig, p, NMCs, number_of_automorphisms, NMCs_batch_size, args_batch_size).
 3. Genera los arrays de detectores y observables. Cada vez que se completa un lote (NMC_batch_size), se realizan los siguientes pasos:
     - Guarda en S3 los arrays en un JSON 
     - Guarda en samples_dynamodb información referente al JSON. (s3_data_path, workers_completed)
