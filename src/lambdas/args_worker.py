@@ -474,6 +474,8 @@ def lambda_handler(event, context=None):
 
             results = convert_to_dynamodb_format(results)
             
+            results = convert_to_dynamodb_format(results)
+
             # * Save results to DynamoDB
             if os.getenv('DYNAMODB_RESULTS_TABLE_NAME') is None:
                 raise ValueError("DYNAMODB_RESULTS_TABLE_NAME is not defined in environment variables")

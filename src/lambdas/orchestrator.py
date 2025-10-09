@@ -228,6 +228,35 @@ def invoke_lambda(payload, lambda_name):
     
 #endregion
 
+def process_and_save_batches(batch_counter, p_val, code_val, number_of_args_combinations_batches, batch_detectors, batch_observables):
+    logging.info(f"Saving batch {batch_counter}...")
+
+    # Save samples of the batch.
+    results_for_batch = {
+        "detectors": batch_detectors,
+        "observables": batch_observables
+    }
+
+    p_str = f"{p_val}".replace(".", "c")
+    id_nmc_batch = f"nmc_{code_val}_{p_str}_{batch_counter}" # Example: nmc_72_0c001_1
+    s3_path = os.path.join(f"{os.getenv('S3_DETECTORS_OBSERVABLES_PATH')}", f"code_{code_val}/p_{p_str}/batch_{batch_counter}.json")
+    upload_samples_to_s3(results_for_batch, s3_path)
+    logging.info(f"Batch {batch_counter} results saved to S3 at {s3_path}")
+    
+    # Save batch info in DynamoDB samples_dynamodb.
+    upload_samples_info_to_dynamodb(id_nmc_batch, s3_path)
+
+    if not os.getenv('LAMBDA_NMC_WORKER_NAME'):
+        raise ValueError("LAMBDA_NMC_WORKER_NAME no está definida en las variables de entorno")
+    
+    event = {
+        'id_nmc_batch': id_nmc_batch,
+        'number_of_args_combinations_batches': number_of_args_combinations_batches
+        }
+    response = invoke_lambda(event, os.getenv('LAMBDA_NMC_WORKER_NAME'))
+    logging.info(f"nmc_worker invoked with response: {response}")
+
+
 def lambda_handler(event, context):
     try:
         logging.info(f"Event received in orchestrator lambda_handler")
@@ -289,49 +318,18 @@ def lambda_handler(event, context):
                     batch_observables.append(observables[0].tolist())
                     
                     if i % size_batch == 0:     
-
                         batch_counter = i // size_batch
-
-                        logging.info(f"Saving batch {batch_counter}...")
-
-                        # Save samples of the batch.
-                        results_for_batch = {
-                            "detectors": batch_detectors,
-                            "observables": batch_observables
-                        }
-
-                        p_str = f"{p_val}".replace(".", "c")
-                        id_nmc_batch = f"nmc_{code_val}_{p_str}_{batch_counter}" # Example: nmc_72_0c001_1
-                        s3_path = os.path.join(f"{os.getenv('S3_DETECTORS_OBSERVABLES_PATH')}", f"code_{code_val}/p_{p_str}/batch_{batch_counter}.json")
-                        upload_samples_to_s3(results_for_batch, s3_path)
-                        logging.info(f"Batch {batch_counter} results saved to S3 at {s3_path}")
+                        process_and_save_batches(batch_counter, p_val, code_val, number_of_args_combinations_batches, batch_detectors, batch_observables)
                         
-                        # Save batch info in DynamoDB samples_dynamodb.
-                        upload_samples_info_to_dynamodb(id_nmc_batch, s3_path)
+                        batch_detectors.clear()
+                        batch_observables.clear()
 
-                        if not os.getenv('LAMBDA_NMC_WORKER_NAME'):
-                            raise ValueError("LAMBDA_NMC_WORKER_NAME no está definida en las variables de entorno")
-                        
-                        event = {
-                            'id_nmc_batch': id_nmc_batch,
-                            'number_of_args_combinations_batches': number_of_args_combinations_batches
-                            }
-                        response = invoke_lambda(event, os.getenv('LAMBDA_NMC_WORKER_NAME'))
-                        logging.info(f"nmc_worker invoked with response: {response}")
-                    
-                        batch_detectors = []
-                        batch_observables = []
+                if batch_detectors:
+                    batch_counter = (total_nmcs // size_batch) + 1
+                    logging.info(f"Processing incomplete final batch {batch_counter} with {len(batch_detectors)} samples...")
+                    process_and_save_batches(batch_counter, p_val, code_val, number_of_args_combinations_batches, batch_detectors, batch_observables)
+
         return {"status": "ok"}
     except Exception as e:
         logging.error(f"Error in orchestrator lambda_handler: {e}") 
         return {"status": "failed"}
-
-# if __name__ == "__main__":
-#     number_of_args_combinations_batches = 1 # ! Para pruebas sin eventos
-#     try:
-#         logging.info(f"Executing orchestrator.py locally...")
-#         lambda_handler({"number_of_args_combinations_batches": number_of_args_combinations_batches}, None)
-#         logging.info("Local execution finished.")
-#     except Exception as e:
-#         logging.error(f"Error in orchestrator.py: {e}")
-#         raise RuntimeError("Error in orchestrator.py") from e
