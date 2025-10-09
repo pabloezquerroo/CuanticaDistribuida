@@ -1,21 +1,25 @@
 """ 
 Lambda que realiza las siguientes funciones:
 1. Recibe number_of_args_combinations_batches, id_nmc_batch e id_batch_arguments.
-2. Lee de S3 la configuración de simulación (código, p, NMCs, NMC_batch_size, args_batch_size).
+2. Lee de S3 la configuración de simulación (codeConfig, p, NMCs, number_of_automorphisms, NMCs_batch_size, args_batch_size).
 3. Lee de samples_dynamodb la ruta a S3 y lee de S3 los arrays de detectores y observables.
-4. Actualiza el campo workers_completed + 1.
-    Si workers_completed >= number_of_args_combinations_batches => 
-        - Se elimina el objeto de S3 al que hace referencia id_nmc_batch.
-        - Se elimina la entrada id_nmc_batch de samples_dynamodb
-5. Lee de args_dynamodb los argumentos de su lote (id_batch_arguments)
-6. Realiza la ejecución completa con a partir de la información recibida para cada argumento.
-7. Guarda en una BD cada resultado con id_arguments, id_nmc_batch, codigo, p.
+4. Lee de args_dynamodb los argumentos de su lote (id_batch_arguments).
+5. Para cada argumento:
+   - Lee de S3 el automorfismo correspondiente (PCM, priors, row_perm).
+   - Realiza la simulación completa con el automorfismo aplicado.
+   - Guarda los resultados en DynamoDB (id_nmc_batch, id_arguments, id_automorphism, error_rate, codeConfig, decoder_type, corrected_patterns, Pl, time_max, time_av, arguments).
+6. Actualiza el campo workers_completed + 1.
+   Si workers_completed >= number_of_args_combinations_batches:
+      - Se elimina el objeto de S3 al que hace referencia id_nmc_batch.
+      - Se elimina la entrada id_nmc_batch de samples_dynamodb.
 """
 
 import os
 import json
 import numpy as np  
 import time  
+import io
+import pickle
 
 from ldpc import BpDecoder  
 from ldpc.bplsd_decoder import BpLsdDecoder
@@ -56,6 +60,39 @@ def get_connection_s3():
         aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
     )
 
+def get_automorphism_from_s3(auto_id, error_rate):
+    """
+    Download a specific automorphism from S3
+    """
+    s3 = get_connection_s3()
+    error_rate_str = f"{error_rate:.6f}".rstrip('0').rstrip('.')
+    
+    automorphism_path = os.getenv('S3_AUTOMORPHISMS_PATH')
+    s3_path = f"{automorphism_path}{error_rate_str}/auto_{auto_id}/data.pkl"
+    logging.info(f"Downloading automorphism from S3: {s3_path}")
+    buffer = io.BytesIO()
+    try:
+        s3.download_fileobj(
+            os.getenv('S3_BUCKET_NAME'),
+            s3_path,
+            buffer
+        )
+        buffer.seek(0)
+        data = pickle.load(buffer)
+
+        # ! DEBUG: Pintar tipos de datos
+        # logging.info(f"Type of data['ensemble']: {type(data['ensemble'])}, length: {len(data['ensemble'])}")
+        # logging.info(f"Type of data['priors']: {type(data['priors'])}, length: {len(data['priors'])}")
+        # logging.info(f"Type of data['row_perm']: {type(data['row_perm'])}, length: {len(data['row_perm'])}")
+        # logging.info(f"PCM (ensemble) shape: {data['ensemble'].shape}")
+        # logging.info(f"Priors shape: {data['priors'].shape}")
+        # logging.info(f"Row_perm shape: {data['row_perm'].shape}")
+
+        return data['ensemble'], data['priors'], data['row_perm']
+    except ClientError as e:
+        logging.error(f"Error downloading automorphism {auto_id}: {str(e)}")
+        return None, None, None
+    
 def get_samples_from_s3(bucket_name, s3_data_path):
     """Retrieve a set of samples from an S3 bucket.
 
@@ -266,7 +303,7 @@ def create_results_table_if_not_exists(dynamodb, table_name):
                     ],
                     AttributeDefinitions=[
                         {'AttributeName': 'id_nmc_batch', 'AttributeType': 'S'},
-                        {'AttributeName': 'id_arguments', 'AttributeType': 'N'}
+                        {'AttributeName': 'id_arguments', 'AttributeType': 'S'}
                     ],
                     ProvisionedThroughput={
                         'ReadCapacityUnits': 5,
@@ -285,8 +322,10 @@ def create_results_table_if_not_exists(dynamodb, table_name):
 
 #endregion
 
-def do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables, pcm, observable_mat, error_channel):
-
+    
+# def do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables, pcm, observable_mat, error_channel):
+# AUTOMORFISMOS
+def do_simulation(arguments, codeConfig, p, id_nmc_batch, row_perm, detectors, observables, pcm, observable_mat, error_channel):
     # * Initialize decoders
     if arguments["decoder_type"] == "BP":
         logging.info(f"BP decoder initialized")
@@ -304,36 +343,57 @@ def do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables
     Pl = 0
     time_av = 0
     time_max = 0
-    successful_correction_iterations = []
+    corrected_patterns = []
     
     # * Run Monte Carlo trials
     NMCs_size = len(detectors)
     logging.info(f"Running {NMCs_size} Monte Carlo trials")
+
+    # ! DEBUG: Pintar shapes de matrices
+    # logging.info(f"PCM shape: {pcm.shape}")
+    # logging.info(f"observable_mat shape: {observable_mat.shape}")
+    # logging.info(f"Detector shape: {detectors[0].shape}")
+
     for i in range(NMCs_size):
         a = time.time()
-        predicted_observables = _decoder.decode(detectors[i])
+        # predicted_error = _decoder.decode(detectors[i])
+        # AUTOMORFISMOS
+        predicted_error = _decoder.decode(row_perm @ detectors[i] % 2)
         b = time.time()
         time_av += (b - a) / NMCs_size
         time_max = max(time_max, (b - a))
 
         # # ! DEBUG: Pintar tipos de datos
         # print("observable_mat type, shape:", type(observable_mat), observable_mat.shape)
-        # print("predicted_observables type, shape:", type(predicted_observables), predicted_observables.shape)
+        # print("predicted_error type, shape:", type(predicted_error), predicted_error.shape)
         # print("observables type2, shape:", type(np.atleast_2d(observables[i])), np.atleast_2d(observables[i]).shape)
         # print("observable_mat:\n", observable_mat)
-        # print("predicted_observables:\n", predicted_observables)
+        # print("predicted_error:\n", predicted_error)
         # print("observables[i]:\n", observables[i])
 
-        logical_error = (observable_mat @ predicted_observables + np.atleast_2d(observables[i])) % 2
-        # print("logical_error:\n", logical_error)# ! DEBUG
+        logical_error = (observable_mat @ predicted_error + np.atleast_2d(observables[i])) % 2
+       
+        # ! DEBUG
+        # logging.info(f"Patron {i}:")
+        # logging.info(f"  predicted_error: {predicted_error}")
+        # logging.info(f"  observables[i]: {observables[i]}")
+        # logging.info(f"  logical_error: {logical_error}")
+        # logging.info(f"  logical_error shape: {logical_error.shape}")
+        # syndrome = row_perm @ detectors[i] % 2
+        # logging.info(f"Syndrome: {syndrome}")
+        # logging.info(f"Syndrome shape: {syndrome.shape}")
+        # logging.info(f"Syndrome sum (should not be 0): {np.sum(syndrome)}")
+        
         if np.any(logical_error == 1):
             Pl += 1 / NMCs_size
-            successful_correction_iterations.append(i)
-            logging.info(f"  Error lógico detectado en iteración {i}")
-
+            corrected_patterns.append(i)
+            logging.info(f"  Error lógico corregido en patrón {i}")
+    
+    # * Results
     results = {
         "id_nmc_batch": id_nmc_batch, # ID of the NMC batch: nmc_{code}_{p(0c001)}_{nmc_batch_counter}
         "id_arguments": arguments["id_arguments"], # ID of the arguments used: Decoder_{id_automorphism}
+        "id_automorphism": arguments["id_automorphism"], # ID of the automorphism used: {id_automorphism}
         "codeConfig": codeConfig, # Possible codes: 72, 90, 108, 144, 288, 784
         "error_rate": p, # Error probability
         "decoder_type": arguments["decoder_type"], # Type of decoder
@@ -341,7 +401,7 @@ def do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables
         "Pl": Pl, # Logical error detection probability in the batch
         "time_av": time_av, # Average decoding time in the batch
         "time_max": time_max, # Maximum decoding time in the batch
-        "corrected_iterations": successful_correction_iterations # Iterations where the decoder successfully corrected the error
+        "corrected_patterns": corrected_patterns # Patterns where the decoder successfully corrected the error
     }
     return results
 
@@ -383,7 +443,7 @@ def lambda_handler(event, context=None):
         # pcm = sparse.csc_matrix(code.hx, dtype=np.uint8)
 
         # * Build circuit and detector error model
-        circuit = build_circuit(code, A_list, B_list, p=p, num_repeat=d, z_basis=False, use_both=False)
+        circuit = build_circuit(code, A_list, B_list, p=p, num_repeat=d, z_basis=True, use_both=False)
         logging.info(f"Circuit built")
         dem = circuit.detector_error_model()
         logging.info(f"Detector error model built")
@@ -404,7 +464,15 @@ def lambda_handler(event, context=None):
         detectors, observables = get_samples_from_s3(os.getenv('S3_BUCKET_NAME'), samples_info["s3_data_path"]).values()
 
         for arguments in args_list:
-            results = do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables, pcm, observable_mat, error_channel)
+            # Leer esta informacion de S3
+            
+            # results = do_simulation(arguments, codeConfig, p, id_nmc_batch, detectors, observables, pcm, observable_mat, error_channel)
+            # AUTOMORFISMOS
+            pcm, error_channel, row_perm = get_automorphism_from_s3(arguments["id_automorphism"], error_rate=p)
+            results = do_simulation(arguments, codeConfig, p, id_nmc_batch, row_perm, detectors, observables, pcm, observable_mat, error_channel)
+
+
+            results = convert_to_dynamodb_format(results)
             
             results = convert_to_dynamodb_format(results)
 
@@ -428,6 +496,7 @@ def lambda_handler(event, context=None):
                 logging.error(f"Error saving results to DynamoDB: {e}")
                 raise RuntimeError("Error saving results to DynamoDB") from e
 
+        # * Update workers_completed in samples_dynamodb
         if add_workers_completed_to_dynamodb(dynamodb, id_nmc_batch) >= number_of_args_combinations_batches:
             delete_samples_from_s3(os.getenv('S3_BUCKET_NAME'), samples_info["s3_data_path"])
 
@@ -435,14 +504,3 @@ def lambda_handler(event, context=None):
     except Exception as e:
         logging.error(f"Error in args_worker lambda_handler: {e}")
         return {"status": "failed"}
-# if __name__ == "__main__":
-#     id_nmc_batch = "nmc_90_0c001_2" # nmc_{code}_{p}_{nmc_batch_counter}
-#     number_of_args_combinations_batches = 1
-#     id_batch_arguments = 0
-#     try:
-#         logging.info(f"Executing args_worker.py locally...")
-#         lambda_handler({"id_nmc_batch": id_nmc_batch, "number_of_args_combinations_batches": number_of_args_combinations_batches, "id_batch_arguments": id_batch_arguments}, None)
-#         logging.info("Local execution finished.")
-#     except Exception as e:
-#         logging.error(f"Error in args_worker.py: {e}")
-#         raise RuntimeError("Error in args_worker.py") from e

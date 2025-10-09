@@ -21,8 +21,73 @@ import numpy as np
 import time  
 from scipy import sparse 
 from dem_to_matrices import detector_error_model_to_check_matrices
+import boto3
+from botocore.exceptions import ClientError
+import logging
+import os
+import io
+import pickle
 
 from IBM_STIM import create_bivariate_bicycle_codes, build_circuit, select_configuration, save_sparse_matrices
+
+import dotenv
+
+# Cargar variables de entorno desde el archivo .env
+dotenv.load_dotenv()
+
+automorphism=True
+
+def get_connection_s3():
+    """Create and return a Boto3 S3 client.
+
+    The configuration (endpoint_url, aws_access_key_id, aws_secret_access_key)
+    is loaded from environment variables. These are necessary for providers like
+    Backblaze. For AWS, many of these are configured automatically when running
+    in an AWS environment.
+
+    Returns:
+        boto3.Client: An S3 client object.
+    """
+    return boto3.client(
+        's3',
+        endpoint_url=os.getenv('S3_ENDPOINT_URL'),
+        region_name=os.getenv('AWS_DEFAULT_REGION'),
+        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
+    )
+
+def get_automorphism_from_s3(auto_id, error_rate):
+    """
+    Download a specific automorphism from S3
+    """
+    s3 = get_connection_s3()
+    error_rate_str = f"{error_rate:.6f}".rstrip('0').rstrip('.')
+    
+    automorphism_path = os.getenv('S3_AUTOMORPHISMS_PATH')
+    s3_path = f"{automorphism_path}{error_rate_str}/auto_{auto_id}/data.pkl"
+    logging.info(f"Downloading automorphism from S3: {s3_path}")
+    buffer = io.BytesIO()
+    try:
+        s3.download_fileobj(
+            os.getenv('S3_BUCKET_NAME'),
+            s3_path,
+            buffer
+        )
+        buffer.seek(0)
+        data = pickle.load(buffer)
+
+        # ! DEBUG: Pintar tipos de datos
+        # logging.info(f"Type of data['ensemble']: {type(data['ensemble'])}, length: {len(data['ensemble'])}")
+        # logging.info(f"Type of data['priors']: {type(data['priors'])}, length: {len(data['priors'])}")
+        # logging.info(f"Type of data['row_perm']: {type(data['row_perm'])}, length: {len(data['row_perm'])}")
+        # logging.info(f"PCM (ensemble) shape: {data['ensemble'].shape}")
+        # logging.info(f"Priors shape: {data['priors'].shape}")
+        # logging.info(f"Row_perm shape: {data['row_perm'].shape}")
+
+        return data['ensemble'], data['priors'], data['row_perm']
+    except ClientError as e:
+        logging.error(f"Error downloading automorphism {auto_id}: {str(e)}")
+        return None, None, None
 
 # * STARTING TIME
 time_start = time.time()
@@ -30,20 +95,21 @@ print("Starting time:", time_start)
 
 # * DEBUG VARIABLE
 show_prints = False
-show_times = True
-
+show_times = False
+successful_correction_patterns = [] # ! DEBUG
 
 # * PARAMETERS FOR SIMULATION
 # Codes to test
 codesConfig = [72, 90, 108, 144, 288, 784]
-codeConfig = codesConfig[0]  # Select one of the codes to test
+codeConfig = codesConfig[3]  # Select one of the codes to test
 
 # Number of Monte Carlo trials per physical error rate
-NMCs = [10**6, 10**6, 10**6, 10**6, 10**6]  
-
+# NMCs = [10**6, 10**6, 10**6, 10**6, 10**6]  
+NMCs = [1000]
 
 # Physical error rates to simulate (between 0.1% and 0.5%)
-ps = np.linspace(0.001, 0.005, num=5) # ? Para empezar debemos probar solo con 0.001
+# ps = np.linspace(0.001, 0.005, num=5) # ? Para empezar debemos probar solo con 0.001
+ps = [0.003]
 print("Physical error rates to simulate:", ps)
 
 # * DICTIONARIES FOR RESULTS
@@ -91,14 +157,12 @@ for index, p in enumerate(ps):
     circuit = build_circuit(code, A_list, B_list, 
                         p=p, # physical error rate
                         num_repeat=config["d"], # usually set to code distance
-                        z_basis=False,   # whether in the z-basis or x-basis
+                        z_basis=True,   # whether in the z-basis or x-basis
                         use_both=False, # whether use measurement results in both basis to decode one basis
                         )
     
     dem = circuit.detector_error_model()
 
-
-    # ! ¿Interesa hacer esta parte?
     # Proofs adapting the STIM to BP using as reference
     # https://github.com/oscarhiggott/stimbposd/blob/main/src/stimbposd/bp_osd.py 
     hx_shape = code.hx.shape  # Shape of the X parity matrix
@@ -124,8 +188,38 @@ for index, p in enumerate(ps):
         time_circuit_dem_matrices = time.time() - time_start
         print("Time to create the circuit, detector error model and matrices:", time_circuit_dem_matrices)
 
+    
+    # * PARAMETERS FOR AUTOMORPHISMS
+    if automorphism:
+        pcm, dem_error_channel, row_perm = get_automorphism_from_s3(0, error_rate=p)
+
+
+    # ! DEGUG: Comparar elementos
+    # dem_error_channel con matrices.priors, viendo las diferencias
+    # for i in range(len(dem_error_channel)):
+    #     if dem_error_channel[i] != matrices.priors[i]:
+    #         print(f"Difference at index {i}: dem_error_channel={dem_error_channel[i]}, matrices.priors={matrices.priors[i]}")
+    # ! DEBUG: Guardar datos de automorfismos
+    # Guardar datos en archivo local para comparación
+    # data_to_save = {
+    #     'pcm': pcm,
+    #     'dem_error_channel': dem_error_channel,
+    #     'row_perm': row_perm
+    # }
+    # np.savetxt("../experiments/dem_error_channel.txt", dem_error_channel)
+    # np.savetxt("../experiments/dem_error_channel_example.txt", matrices.priors)
+    # Crear nombre de archivo con la configuración actual
+    # filename = f"py_data_config_{codeConfig}_p_{p:.6f}.pkl"
+    # filepath = os.path.join(os.getcwd(), "../experiments", filename)
+    # with open(filepath, 'wb') as f:
+    #     pickle.dump(data_to_save, f)    
+    # print(f"Datos guardados en ../experiments/")
+    # exit()
+    # ! DEBUG: Fin guardar datos de automorfismos
+
     # https://software.roffe.eu/ldpc/quantum_decoder.html               
-    _bp = BpDecoder(pcm, max_iter=100, error_rate=float(p), bp_method="product_sum", error_channel=dem_error_channel) #  error_channel antes era channel_probs
+    _bp = BpDecoder(pcm, max_iter=100, ms_scaling_factor=0.9, error_rate=float(p), bp_method="minimum_sum", error_channel=dem_error_channel) # error_channel antes era channel_probs
+    # _bp = BpDecoder(pcm, max_iter=100, error_rate=float(p), bp_method="product_sum", error_channel=dem_error_channel) #  error_channel antes era channel_probs
     _bplsd = BpLsdDecoder(pcm, max_iter=100, error_rate=float(p), bp_method="product_sum", osd_method = 'lsd_cs', osd_order = 2)
     _bposd = BpOsdDecoder(pcm, max_iter=100, error_rate=float(p), bp_method="product_sum", schedule = 'parallel', osd_method="osd_0")
 
@@ -138,39 +232,39 @@ for index, p in enumerate(ps):
     
     if show_times:
         time_before_monte_carlo = time.time() - time_start
-        print("Time until beginning of the Monte Carlo iterations:", time_before_monte_carlo)
+        print("Time until beginning of the Monte Carlo patterns:", time_before_monte_carlo)
 
-    for iteration in range(NMCs[index]):
+    for pattern in range(NMCs[index]):
         
         if show_prints:
-            time_init_iteration = time.time() - time_start
-            print(f"Iteration {iteration + 1}/{NMCs[index]} for physical error rate {p} (time since start: {time_init_iteration} seconds)")
+            time_init_pattern = time.time() - time_start
+            print(f"pattern {pattern + 1}/{NMCs[index]} for physical error rate {p} (time since start: {time_init_pattern} seconds)")
 
         # Generate aleatory samples of simulated errors
-        sampler = circuit.compile_detector_sampler()
+        sampler = circuit.compile_detector_sampler(seed=42 + pattern + 1)  # Seed for reproducibility
         num_shots = 1
         detectors, observables = sampler.sample(num_shots, separate_observables=True)
-        if show_prints:
-            print("detectors:\n")
-            print(detectors)
-            print("observables:\n")
-            print(observables)
 
-        if show_times and iteration % 1000 == 0:
+        if show_times and pattern % 1000 == 0:
             time_detectors_observables = time.time() - time_start
             print("Time to sample detectors and observables:", time_detectors_observables)
             
         #BP
         a = time.time()  
-        predicted_observables = _bp.decode(detectors[0])
+        if automorphism:
+            transformed_detectors = (row_perm @ detectors[0] % 2) # Automorphism
+            predicted_error = _bp.decode(transformed_detectors)
 
-        if show_times and iteration % 1000 == 0:
+        else:
+            predicted_error = _bp.decode(detectors[0])
+
+        if show_times and pattern % 1000 == 0:
             time_bp_decoding = time.time() - time_start
-            print("Time for BP decoding (iteration % 1000 == 0):", time_bp_decoding)
+            print("Time for BP decoding (pattern % 1000 == 0):", time_bp_decoding)
 
         #soft_decisions = _bp.bp_decoding
         #convergence = _bp.converge
-        #iteration_stop = _bp.iter
+        #pattern_stop = _bp.iter
         #soft_decisions_llr =  _bp.log_prob_ratios
         #print(soft_decisions_llr)
         b = time.time() 
@@ -185,16 +279,17 @@ for index, p in enumerate(ps):
             print("time_max_BP:",time_max_BP)
             print("\n")    
         if show_prints:
-            print("predicted observables:\n")
-            print(predicted_observables)
-            
+            print("predicted error:\n")
+            print(predicted_error)
+     
+        '''
         #BPLSD    
         a = time.time()
-        predicted_observables_lsd = _bplsd.decode(detectors[0])
+        predicted_error_lsd = _bplsd.decode(detectors[0])
 
-        if show_times and iteration % 1000 == 0:
+        if show_times and pattern % 1000 == 0:
             time_bplsd_decoding = time.time() - time_start
-            print("Time for BPLSD decoding (iteration % 1000 == 0):", time_bplsd_decoding)
+            print("Time for BPLSD decoding (pattern % 1000 == 0):", time_bplsd_decoding)
 
         b = time.time()
         time_av_BPLSD += (b - a) / NMCs[index]
@@ -209,15 +304,15 @@ for index, p in enumerate(ps):
             print("\n")    
         if show_prints:
             print("predicted observables_lsd:\n")
-            print(predicted_observables_lsd)    
+            print(predicted_error_lsd)    
         
         #BPOSD    
         a = time.time()
-        predicted_observables_osd = _bposd.decode(detectors[0])
+        predicted_error_osd = _bposd.decode(detectors[0])
 
-        if show_times and iteration % 1000 == 0:
+        if show_times and pattern % 1000 == 0:
             time_bposd_decoding = time.time() - time_start
-            print("Time for BPOSD decoding (iteration % 1000 == 0):", time_bposd_decoding)
+            print("Time for BPOSD decoding (pattern % 1000 == 0):", time_bposd_decoding)
 
         b = time.time()
         time_av_BPOSD += (b - a) / NMCs[index]
@@ -232,36 +327,47 @@ for index, p in enumerate(ps):
             print("\n")    
         if show_prints:
             print("predicted observables_osd:\n")
-            print(predicted_observables_osd)    
+            print(predicted_error_osd)    
+        '''
         
         #Compute the logical error rate
+        # ! DEBUG: Pintar tipos de datos
+        # print("observable_mat type, shape:", type(observable_mat), observable_mat.shape)
+        # print("observable_mat:\n", observable_mat)
+
+        # print("predicted_error type, shape:", type(predicted_error), predicted_error.shape)
+        # print("predicted_error:\n", predicted_error)
+
+        # print("observables type, shape:", type(observables), observables.shape)
+        # print("observables:\n", observables)
         
-        logical_error = (observable_mat@predicted_observables+observables) % 2
-        logical_error_lsd = (observable_mat@predicted_observables_lsd+observables) % 2
-        logical_error_osd = (observable_mat@predicted_observables_osd+observables) % 2
-                        
+        logical_error = (observable_mat@predicted_error+observables) % 2
+        # logical_error_lsd = (observable_mat@predicted_error_lsd+observables) % 2 
+        # logical_error_osd = (observable_mat@predicted_error_osd+observables) % 2
         if show_prints:
             print("logical error:\n")
             print(logical_error)
         
         if np.any(logical_error == 1):
             PlBP += 1/NMCs[index]
-            #print(f'Error BP: {PlBP}')        
-        if np.any(logical_error_lsd == 1):
-            PlBPLSD += 1/NMCs[index]  
-            #print(f'Error BPLSD: {PlBPLSD}')     
-        if np.any(logical_error_osd == 1):
-            PlBPOSD += 1/NMCs[index]  
-            #print(f'Error BPOSD: {PlBPOSD}')                
+            print(f'Error corrected in pattern {pattern}') # ! DEBUG
+            # print(f'Error BP: {PlBP}')        
+        # if np.any(logical_error_lsd == 1):
+        #     PlBPLSD += 1/NMCs[index]  
+        #     # print(f'Error BPLSD: {PlBPLSD}')     
+        # if np.any(logical_error_osd == 1):
+        #     PlBPOSD += 1/NMCs[index]  
+        #     # print(f'Error BPOSD: {PlBPOSD}')                
         
-        
+
     # Store results
-    PlsBP.append(PlBP)
-    PlsBPLSD.append(PlBPLSD)
-    PlsBPOSD.append(PlBPOSD)
+    PlsBP[codeConfig].append(PlBP)
+    # PlsBPLSD[codeConfig].append(PlBPLSD)
+    # PlsBPOSD[codeConfig].append(PlBPOSD)
     
 
     print(f'Physical error: {p}')
+    # print(f'Successful correction patterns (no logical error) for BP: {successful_correction_patterns}') # ! DEBUG
     print(f'Logical error BP: {PlBP} with average time {time_av_BP} and max time {time_max_BP}')
-    print(f'Error BPLSD: {PlBPLSD} with average time {time_av_BPLSD} and max time {time_max_BPLSD}')
-    print(f'Error BPOSD: {PlBPOSD} with average time {time_av_BPOSD} and max time {time_max_BPOSD}')
+    # print(f'Error BPLSD: {PlBPLSD} with average time {time_av_BPLSD} and max time {time_max_BPLSD}')
+    # print(f'Error BPOSD: {PlBPOSD} with average time {time_av_BPOSD} and max time {time_max_BPOSD}')

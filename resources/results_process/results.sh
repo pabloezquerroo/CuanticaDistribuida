@@ -6,4 +6,4 @@ aws dynamodb scan \
     --endpoint-url http://localhost:8001 \
     --no-paginate \
     --output json > results.json && \
-    uv run json_to_parquet.py
+    uv run json_to_parquet_and_csv.py
