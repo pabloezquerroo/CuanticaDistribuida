@@ -1,14 +1,13 @@
 """ 
 Lambda que realiza las siguientes funciones:
 1. Recibe number_of_args_combinations_batches, id_nmc_batch e id_batch_arguments.
-2. Lee de S3 la configuración de simulación (codeConfig, p, NMCs, number_of_automorphisms, NMCs_batch_size, args_batch_size).
-3. Lee de samples_dynamodb la ruta a S3 y lee de S3 los arrays de detectores y observables.
-4. Lee de args_dynamodb los argumentos de su lote (id_batch_arguments).
-5. Para cada argumento:
+2. Lee de samples_dynamodb la ruta a S3 y lee de S3 los arrays de detectores y observables.
+3. Lee de args_dynamodb los argumentos de su lote (id_batch_arguments).
+4. Para cada argumento:
    - Lee de S3 el automorfismo correspondiente (PCM, priors, row_perm).
    - Realiza la simulación completa con el automorfismo aplicado.
    - Guarda los resultados en DynamoDB (id_nmc_batch, id_arguments, id_automorphism, error_rate, codeConfig, decoder_type, corrected_patterns, Pl, time_max, time_av, arguments).
-6. Actualiza el campo workers_completed + 1.
+5. Actualiza el campo workers_completed + 1.
    Si workers_completed >= number_of_args_combinations_batches:
       - Se elimina el objeto de S3 al que hace referencia id_nmc_batch.
       - Se elimina la entrada id_nmc_batch de samples_dynamodb.
