@@ -91,51 +91,119 @@ soft_decisions_llr = _bp.log_prob_ratios
 
 ## Arquitectura Distribuida
 
-La arquitectura del proyecto está diseñada para ejecutar simulaciones de corrección de errores cuánticos de forma masivamente paralela, utilizando un sistema de Lambdas y servicios de AWS. El diseño se basa en un fan-out de dos niveles para distribuir la carga de trabajo: el **orquestador** genera los datos de simulación, un **dispatcher (`nmc_worker`)** distribuye las tareas, y múltiples **workers (`args_worker`)** ejecutan los cálculos finales.
+La arquitectura del proyecto está diseñada para ejecutar simulaciones de corrección de errores cuánticos de forma masivamente paralela, utilizando un sistema de Lambdas y servicios de AWS. El diseño se basa en un fan-out de dos niveles para distribuir la carga de trabajo: el **dispatcher (`args_mixer`)** distribuye las combinaciones de argumentos, el **orquestador (`orchestrator`)** genera los datos de simulación, un segundo **dispatcher (`nmc_worker`)** coordina la distribución de tareas, y múltiples **workers (`args_worker`)** ejecutan los cálculos finales aplicando automorfismos.
 
-Los componentes se comunican de forma asíncrona a través de S3 para el almacenamiento de datos de las simulaciones y DynamoDB para el almacenamiento de los argumentos, la coordinación y el estado.
+Los componentes se comunican de forma asíncrona a través de S3 para el almacenamiento de configuraciones, automorfismos y datos temporales de simulación, y DynamoDB para la coordinación, estado y resultados finales.
 
 ### Componentes del Sistema
 
--   **`args_mixer.py` (Lambda 1)**
+-   **`args_mixer.py` (Lambda 1 - Dispatcher)**
     -   **Disparador**: Subida de un archivo `config.json` a un bucket de S3.
-    -   **Función**: Lee la configuración, genera todas las combinaciones de parámetros de simulación y las agrupa en lotes. Cada lote se guarda como un ítem en la tabla `args_dynamodb`.
-    -   **Salida**: Invoca al `orchestrator.py`.
+    -   **Función**: Lee la configuración del JSON que contiene:
+        -   `codeConfig`: Configuración del código cuántico (ej. 144).
+        -   `NMCs`: Lista de números de simulaciones Monte Carlo a ejecutar.
+        -   `p`: Lista de probabilidades de error físico.
+        -   `number_of_automorphisms`: Número de automorfismos disponibles.
+        -   `args_batch_size`: Tamaño del lote de argumentos.
+    -   Genera todas las combinaciones de parámetros de decodificadores y las agrupa en lotes de tamaño `args_batch_size`.
+    -   Cada lote se guarda como un ítem en la tabla `args_dynamodb` con identificador `id_batch_arguments`.
+    -   **Salida**: Invoca al `orchestrator.py` con el número total de lotes de combinaciones de argumentos (`number_of_args_combinations_batches`).
 
--   **`orchestrator.py` (Lambda 2)**
-    -   **Función**: Prepara los datos para la simulación. Genera los arrays de detectores y observables en lotes de tamaño `NMC_batch_size`.
-    -   Por cada lote de datos, realiza dos acciones:
-        1.  Guarda los arrays en un archivo JSON en S3.
-        2.  Crea una entrada en la tabla `samples_dynamodb` con el ID del lote (`id_nmc_batch`), la ruta al JSON en S3 (`s3_data_path`) y un contador (`workers_completed`).
-    -   **Salida**: Invoca a `nmc_worker.py` por cada lote de datos generado.
+-   **`orchestrator.py` (Lambda 2 - Orquestador)**
+    -   **Función**: Prepara los datos para la simulación. Lee la configuración de S3 y genera los arrays de detectores y observables en lotes de tamaño `NMC_batch_size`.
+    -   Por cada lote de datos, realiza tres acciones:
+        1.  Genera los arrays de detectores y observables mediante simulación cuántica.
+        2.  Guarda los arrays en un archivo JSON en S3 con ruta estructurada: `bucket/automorphisms/<code>_<p>/detectors_observables/batch_X.json`.
+        3.  Crea una entrada en la tabla `samples_dynamodb` con:
+            -   `id_nmc_batch`: Identificador único del lote (formato: `nmc_<code>_<p>_<batch_counter>`).
+            -   `s3_data_path`: Ruta al JSON en S3.
+            -   `workers_completed`: Contador inicializado a 0.
+    -   **Salida**: Invoca a `nmc_worker.py` por cada lote de datos generado, pasando `id_nmc_batch` y `number_of_args_combinations_batches`.
 
--   **`nmc_worker.py` (Lambda 3)**
+-   **`nmc_worker.py` (Lambda 3 - Dispatcher de segundo nivel)**
     -   **Función**: Actúa como un dispatcher de segundo nivel. Su objetivo es distribuir las combinaciones de argumentos contra un lote de datos de simulación.
-    -   Recibe un `id_nmc_batch`.
-    -   Invoca una instancia de `args_worker.py` por cada lote de argumentos que deba procesarse, pasando el `id_nmc_batch` y el `id_batch_arguments` correspondiente.
+    -   Recibe:
+        -   `id_nmc_batch`: Identificador del lote de datos.
+        -   `number_of_args_combinations_batches`: Número total de lotes de argumentos.
+    -   Invoca una instancia de `args_worker.py` por cada lote de argumentos (`id_batch_arguments`), pasando:
+        -   `id_nmc_batch`
+        -   `id_batch_arguments` (distinto en cada invocación)
+        -   `number_of_args_combinations_batches`
 
--   **`args_worker.py` (Lambda 4)**
-    -   **Función**: Es el worker principal que ejecuta la simulación.
-    -   Recibe `id_nmc_batch` y `id_batch_arguments`.
-    -   Lee los datos de simulación (detectores/observables) desde S3 (usando la ruta de `samples_dynamodb`) y el lote de argumentos desde `args_dynamodb`.
-    -   Ejecuta el cálculo de QEC para cada argumento del lote.
-    -   Guarda el resultado final en una base de datos de resultados (DB).
-    -   **Coordina la limpieza**: Incrementa el contador `workers_completed` en `samples_dynamodb`. Si es el último worker para ese `id_nmc_batch`, borra el archivo de datos temporales de S3 y la entrada correspondiente en `samples_dynamodb`.
+-   **`args_worker.py` (Lambda 4 - Worker Principal)**
+    -   **Función**: Es el worker principal que ejecuta la simulación con automorfismos.
+    -   Recibe:
+        -   `id_nmc_batch`: Identifica el lote de datos de simulación.
+        -   `id_batch_arguments`: Identifica el lote de argumentos a procesar.
+        -   `number_of_args_combinations_batches`: Número total de lotes para coordinar limpieza.
+    -   Proceso:
+        1.  Lee los datos de simulación (detectores/observables) desde S3 usando la ruta almacenada en `samples_dynamodb`.
+        2.  Lee el lote de argumentos desde `args_dynamodb` (id_batch_arguments).
+        3.  Para cada argumento en el lote:
+            -   Lee de S3 el automorfismo correspondiente (`id_automorphism`): PCM, priors, row_perm desde `bucket/automorphisms/<error_rate>/auto_<id>/data.pkl`.
+            -   Aplica el automorfismo a los detectores mediante `row_perm @ detectors[i] % 2`.
+            -   Ejecuta la decodificación con el PCM y priors del automorfismo.
+            -   Calcula métricas: error_rate, Pl (probabilidad de error lógico), time_av, time_max, corrected_patterns.
+        4.  Guarda los resultados en `results_dynamodb` con estructura:
+            ```
+            {
+                "id_nmc_batch": "<nmc_batch_id>",
+                "id_arguments": "<decoder>_<id_automorphism>",
+                "id_automorphism": <id>,
+                "codeConfig": <code>,
+                "error_rate": <p>,
+                "decoder_type": "<BP|BPLSD|BPOSD>",
+                "arguments": {...},
+                "Pl": <float>,
+                "time_av": <float>,
+                "time_max": <float>,
+                "corrected_patterns": [...]
+            }
+            ```
+    -   **Coordina la limpieza**: Incrementa el contador `workers_completed` en `samples_dynamodb`. Si es el último worker (`workers_completed >= number_of_args_combinations_batches`), borra el archivo de datos temporales de S3 y la entrada correspondiente en `samples_dynamodb`.
 
 ### Servicios AWS
--   **Lambda**: Ejecucion de las diferentes funciones que conforman la arquitectura distribuida.
--   **S3**: Almacenamineto de las variables de configuración iniciales (`config.json`) y los datos temporales de simulación (detectores/observables).
--   **DynamoDB**: Almacenamiento de combinaciones de argumentos para los decoders (`args_dynamodb`), información referente a los datos temporales de la simulación (`samples_dynamodb`).
--   **DB de Resultados**: Base de datos final para almacenar los resultados de las simulaciones. _Temporalmente se usa DynamoDB(`results_dynamoDB`)_
+-   **Lambda**: Ejecución de las diferentes funciones que conforman la arquitectura distribuida.
+-   **S3**: Almacenamiento de:
+    -   Variables de configuración iniciales (`config.json`).
+    -   Automorfismos precalculados por código y probabilidad de error.
+    -   Datos temporales de simulación (detectores/observables).
+-   **DynamoDB**: 
+    -   `args_dynamodb`: Combinaciones de argumentos para los decodificadores.
+    -   `samples_dynamodb`: Información referente a los datos temporales de simulación y coordinación de workers.
+    -   `results_dynamodb`: Resultados finales de las simulaciones con automorfismos.
 
 ### Flujo de Ejecución
 1.  **Inicio**: Un usuario sube el archivo `config.json` a S3, lo que dispara `args_mixer`.
-2.  **`args_mixer`**: Genera las combinaciones de argumentos y las guarda en `args_dynamodb`. Invoca al `orchestrator`.
-3.  **`orchestrator`**: Genera un lote de datos de simulación (ej. 1000 NMCs), lo guarda en S3 y crea una entrada de seguimiento en `samples_dynamodb`. Invoca a `nmc_worker` con el ID del lote de datos (`id_nmc_batch`).
-4.  **`nmc_worker`**: Recibe el `id_nmc_batch`. Invoca a N instancias de `args_worker`, una por cada lote de argumentos (`id_batch_arguments`) que se debe probar contra ese lote de datos.
-5.  **`args_worker`**: Cada instancia lee sus argumentos (`args_dynamodb`) y los datos de simulación (S3), ejecuta los cálculos y guarda el resultado en la BD final.
+2.  **`args_mixer`**: Genera las combinaciones de argumentos (decodificadores × automorfismos) y las guarda en lotes en `args_dynamodb`. Invoca al `orchestrator` con el número total de lotes de argumentos.
+3.  **`orchestrator`**: Genera un lote de datos de simulación (ej. 1000 NMCs), lo guarda en S3 y crea una entrada de seguimiento en `samples_dynamodb`. Invoca a `nmc_worker` con el ID del lote de datos (`id_nmc_batch`) y el número de lotes de argumentos.
+4.  **`nmc_worker`**: Recibe el `id_nmc_batch` y `number_of_args_combinations_batches`. Invoca a N instancias de `args_worker`, una por cada lote de argumentos (`id_batch_arguments`) que se debe probar contra ese lote de datos.
+5.  **`args_worker`**: Cada instancia:
+    -   Lee sus argumentos de `args_dynamodb`.
+    -   Lee los datos de simulación de S3.
+    -   Para cada argumento, lee el automorfismo correspondiente de S3.
+    -   Ejecuta la decodificación aplicando el automorfismo.
+    -   Guarda los resultados en `results_dynamodb`.
 6.  **Limpieza**: El último `args_worker` de un lote de datos limpia los datos temporales de S3 y `samples_dynamodb`.
 7.  El proceso se repite desde el paso 3 para todos los lotes de datos que el orquestador necesite generar.
+
+### Estructura de Datos en S3
+
+```
+bucket/
+├── config.json
+└── automorphisms/
+    ├── <error_rate_1>/
+    │   ├── auto_0/
+    │   │   └── data.pkl (PCM, priors, row_perm)
+    │   ├── auto_1/
+    │   │   └── data.pkl
+    │   └── detectors_observables/
+    │       ├── batch_0.json
+    │       └── batch_1.json
+    └── <error_rate_2>/
+        └── ...
+```
 
 ---
 
@@ -166,6 +234,12 @@ Herramientas y pasos a seguir para la prueba del proyecto en un entorno local.
     ```bash
     cd resources
     docker-compose up
+    ```
+
+4.  **Preparar Automorfismos:**
+    -   Asegúrate de que los automorfismos precalculados estén disponibles en S3 en la estructura esperada:
+    ```
+    bucket/automorphisms/<error_rate>/auto_<id>/data.pkl
     ```
 
 5. **Ejecutar pipeline:**
@@ -203,6 +277,6 @@ En el directorio `resources/results_process/` se maneja todo lo relacionado con 
 ```bash 
 sh results.sh
 ```
-> Esto generará los archivos `results.json` y `results.parquet` con los datos extraidos de la DynamoDB.
+> Esto generará los archivos `results.json`, `results.parquet` y `results.csv` con los datos extraidos de la DynamoDB, incluyendo las métricas de cada combinación de decodificador y automorfismo.
 ---
 
