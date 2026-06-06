@@ -236,28 +236,42 @@ Herramientas y pasos a seguir para la prueba del proyecto en un entorno local.
     docker-compose up
     ```
 
+4. **Iniciar S3 local:**
+    
+    Se hace uso del framework [serverless](https://www.serverless.com/) con los plugins `serverless-s3-local` y `serverless-offline` para simular S3 localmente. 
+    
+    -   Asegúrate de tener Node.js instalado. En macOS, lo habitual es instalar Node.js con Homebrew, lo que incluye `npm`:
+    ```bash
+    brew install node
+    ```
+
+    -  Instala las dependencias Node del proyecto. Esto ya incluye los plugins de Serverless declarados en `package.json`:
+    ```bash
+    npm install
+    ```
+
+
+    El bucket se crea automáticamente al iniciar el entorno con `serverless offline`.
+
 4.  **Preparar Automorfismos:**
+    
+    Los automorfismo se calculan y guardan mediante el script `reference_code/automorphisms/Pablo_automorph.ipynb`. Asegúrate de ejecutar este jupiterNB para generar los automorfismos necesarios antes de lanzar el pipeline. El script guardará los automorfismos en S3 siguiendo la estructura esperada.
+
     -   Asegúrate de que los automorfismos precalculados estén disponibles en S3 en la estructura esperada:
     ```
     bucket/automorphisms/<error_rate>/auto_<id>/data.pkl
     ```
 
 5. **Ejecutar pipeline:**
-    -   Utilizamos el framework [serverless](https://www.serverless.com/).
 
-    -  Instalamos plugins:
-        - Plugin [serverless offline](https://www.serverless.com/plugins/serverless-offline).
-        ```bash
-        npm install serverless-offline --save-dev
-        ```
-        - Plugin [serverless-s3-local](https://www.serverless.com/plugins/serverless-s3-local) .
-        ```bash
-        npm install serverless-s3-local --save-dev
-        ```
-
-    - Lanzamos entorno virtual generado por [uv](https://docs.astral.sh/uv/) (`source .venv/bin/activate`).
+    - Lanzamos el entorno virtual generado por [uv](https://docs.astral.sh/uv/) (`source .venv/bin/activate`) o, de forma más robusta, ejecutamos el arranque con `uv run` para que `serverless-offline` herede el Python del entorno virtual.
     ```bash
-    serverless offline start
+    uv run npm exec serverless offline start
+    ```
+
+    -   Si prefieres `npx`, también funciona:
+    ```bash
+    uv run npx serverless offline start
     ```
 
     - Cargamos archivo `config.json` ubicado en la carpeta `/resources` a S3-local con el script `/resources/manage_resources.py`.
@@ -271,9 +285,25 @@ Herramientas y pasos a seguir para la prueba del proyecto en un entorno local.
     ```
 
 #### Resultados
+
 Los resultados del pipeline son guardados en una tabla de DynamoDB Local llamada `results_dynamodb`.
 
-En el directorio `resources/results_process/` se maneja todo lo relacionado con la analítica de los resultados. Para poder extraer los datos de la tabla a parquet ejecutamos el siguiente script:
+En el directorio `resources/results_process/` se maneja todo lo relacionado con la analítica de los resultados. 
+
+Para poder extraer los datos de la tabla de dynamoDB instalamos `awscli` con el siguiente comando para macOS:
+```bash
+brew install awscli
+```
+
+`awscli` requiere configuración, la cual en nuestro caso será dummy, ya que no se conecta a AWS real. Ejecutamos el siguiente comando para configurar `awscli`:
+```bash
+aws configure
+```
+- AWS Access Key ID: S3RVER
+- AWS Secret Access Key: S3RVER
+- Default region name: us-east-1
+
+Posteriormente, para extraer los datos de DynamoDB y guardarlos en un formato legible como JSON, CSV o Parquet ejecutamos el script `results.sh` ubicado en el mismo directorio:
 ```bash 
 sh results.sh
 ```
