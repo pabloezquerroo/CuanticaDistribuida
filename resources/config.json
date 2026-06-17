@@ -6,9 +6,9 @@
         1000
     ],
     "p": [
-        0.001
+        0.003
     ],
-    "number_of_automorphisms": 6,
-    "NMCs_batch_size": 100,
+    "number_of_automorphisms": 72,
+    "NMCs_batch_size": 500,
     "args_batch_size": 1
 }

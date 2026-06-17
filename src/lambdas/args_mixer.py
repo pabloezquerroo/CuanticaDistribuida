@@ -1,7 +1,7 @@
 """
 Lambda que realiza las siguientes funciones:
 1. Se lee args_batch_size del archivo de S3 para estructurar combinaciones de argumentos en lotes.
-2. Se crean todas las posibles combinaciones de argumentos y se añaden a una DynamoDB.
+2. Se crean argumentos para todos los automorfismos guardados en S3 y se añaden a una DynamoDB.
 3. Se invoca orchestrator.py con el número de lotes de combinaciones de argumentos guardados (number_of_args_combinations_batches).
 """
 
@@ -21,14 +21,38 @@ logging.basicConfig(level=logging.INFO)
 import dotenv
 
 # TODO: Realizar lógica que genere todas las posibles combinaciones de argumentos a partir de una lista de argumentos generales y específicos para los decodificadores
-def generate_args():
-    args_list = [
-        {
-            "id_arguments": 0,
-            "decoder_type": "BP",
-            "arguments": {"max_iter": 100, "ms_scaling_factor": Decimal('0.9'), "bp_method": "minimum_sum"}
-        }
-    ]
+# def generate_args(config):
+#         # {
+#         #     "id_arguments": 0,
+#         #     "decoder_type": "BP",
+#         #     "arguments": {"max_iter":100, "bp_method":"product_sum", "error_channel":"dem_error_channel"}
+#         # }, 
+#         # {
+#         #     "id_arguments": 1,
+#         #     "decoder_type": "BPLSD",
+#         #     "arguments": {"max_iter":100, "bp_method":"product_sum", "osd_method":"lsd_cs", "osd_order":2}
+#         # },
+#         # {
+#         #     "id_arguments": 2,
+#         #     "decoder_type": "BPOSD",
+#         #     "arguments": {"max_iter":100, "bp_method":"product_sum", "schedule":"parallel", "osd_method":"osd_0"}
+#         # }
+#     ]
+#     return args_list
+
+# AUTOMORFISMOS
+def generate_args(config):
+    number_of_automorphisms = config['number_of_automorphisms']
+    args_list = []
+    for i in range(number_of_automorphisms):
+        args_list.append(
+            {
+                "id_automorphism": i,
+                "id_arguments": f"BP_{i}",
+                "decoder_type": "BP",
+                "arguments": {"max_iter": 100, "ms_scaling_factor": Decimal('0.9'), "bp_method": "minimum_sum"}
+            }
+        )
     return args_list
 
 #region S3 Functions
@@ -63,8 +87,9 @@ def get_config_from_s3(bucket_name, S3_CONFIG_FILE_PATH):
               For example:
               {
                   "codeConfig": [72, 90],      # Possible codes: 72, 90, 108, 144, 288, 784
-                  "p": [0.001, 0.002],         
                   "NMCs": [100, 100],
+                  "p": [0.001],
+                  "number_of_automorphisms": 72,
                   "NMCs_batch_size": 10,       # Size of the NMCs batch
                   "args_batch_size": 10        # Size of the args batch
               }
@@ -74,6 +99,31 @@ def get_config_from_s3(bucket_name, S3_CONFIG_FILE_PATH):
         response = s3.get_object(Bucket=bucket_name, Key=S3_CONFIG_FILE_PATH)
         dict_config = json.loads(response['Body'].read().decode('utf-8'))
         logging.info("Configuration loaded from S3.")
+        
+        if dict_config['codeConfig'] is None:
+            logging.error("codeConfig not found in configuration. Exiting.")
+            return {"status": "failed"}
+        if dict_config["NMCs"] is None:
+            logging.error("NMCs not found in configuration. Exiting.")
+            return {"status": "failed"}
+        if len(dict_config['codeConfig']) != len(dict_config['NMCs']):
+            logging.error("codeConfig and NMCs must have the same number of elements. Exiting.")
+            return {"status": "failed"}
+        
+        if dict_config["p"] is None:
+            logging.error("p not found in configuration. Exiting.")
+            return {"status": "failed"}
+        if dict_config['number_of_automorphisms'] < 1:
+            logging.error("number_of_automorphisms must be greater than 0. Exiting.")
+            return {"status": "failed"}
+
+        if dict_config['NMCs_batch_size'] is None or dict_config['NMCs_batch_size'] < 1:
+            logging.error("NMCs_batch_size must be greater than 0. Exiting.")
+            return {"status": "failed"}
+        if dict_config['args_batch_size'] is None or dict_config['args_batch_size'] < 1:
+            logging.error("args_batch_size must be greater than 0. Exiting.")
+            return {"status": "failed"}
+        
         return dict_config
     except ClientError as e:
         logging.error(f"Error loading configuration from S3: {e}")
@@ -116,7 +166,7 @@ def create_table_args_dynamodb_if_not_exists(dynamodb, table_name):
                     ],
                     AttributeDefinitions=[
                         {'AttributeName': 'id_batch_arguments', 'AttributeType': 'N'},
-                        {'AttributeName': 'id_arguments', 'AttributeType': 'N'}
+                        {'AttributeName': 'id_arguments', 'AttributeType': 'S'}
                     ],
                     ProvisionedThroughput={
                         'ReadCapacityUnits': 5,
@@ -136,14 +186,6 @@ def create_table_args_dynamodb_if_not_exists(dynamodb, table_name):
 #endregion
 
 #region Lambda Functions
-# def get_connection_lambda():
-#     return boto3.client('lambda',
-#         region_name=os.getenv('AWS_DEFAULT_REGION'),
-#         endpoint_url=os.getenv('LAMBDA_ENDPOINT_URL'),
-#         aws_access_key_id='dummy',
-#         aws_secret_access_key='dummy'
-#     )
-
 def invoke_lambda(payload, lambda_name):
     """
     Invoke a Lambda function either locally or in AWS.
@@ -190,17 +232,13 @@ def lambda_handler(event, context):
         if not config:
             logging.error("No configuration found in S3. Exiting.")
             return {"status": "failed"}
-        
-        args_batch_size = config['args_batch_size']
-        if args_batch_size < 1:
-            logging.error("args_batch_size must be greater than 0. Exiting.")
-            return {"status": "failed"}
 
-        
-        args_list = generate_args()
+        args_list = generate_args(config)
         if len(args_list) < 1:
             logging.error("No args to process. Exiting.")
             return {"status": "failed"}
+        
+        args_batch_size = config['args_batch_size']
         number_of_args_combinations_batches = math.ceil(len(args_list) / args_batch_size)
         
         if os.getenv('DYNAMODB_ARGS_TABLE_NAME') is None:
@@ -226,12 +264,13 @@ def lambda_handler(event, context):
                     Item={
                         'id_batch_arguments': id_batch_arguments,
                         'id_arguments': args['id_arguments'],
+                        'id_automorphism': args['id_automorphism'],
                         'decoder_type': args['decoder_type'],
                         'arguments': args['arguments']
                     },
                     ConditionExpression='attribute_not_exists(id_batch_arguments) AND attribute_not_exists(id_arguments)'
                 )
-                logging.info(f"Item {i} loaded to table '{os.getenv('DYNAMODB_ARGS_TABLE_NAME')}'")
+                logging.info(f"Item {i} (id_automorphism {args['id_automorphism']}) loaded to table '{os.getenv('DYNAMODB_ARGS_TABLE_NAME')}'")
             except ClientError as e:
                 if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
                     logging.error(f"Item with id_batch_arguments={id_batch_arguments} and id_arguments={args['id_arguments']} already exists. Skipping.")

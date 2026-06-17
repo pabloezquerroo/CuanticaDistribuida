@@ -26,3 +26,6 @@ package-lock.json
 # Results
 *results.json
 *results.parquet
+
+# Experiments
+experiments/

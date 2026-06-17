@@ -89,12 +89,20 @@ def clean_s3_bucket(bucket_name):
     s3_client = get_s3_client()
     
     try:
-        # Listar y eliminar todos los objetos en el bucket
+        # Listar todos los objetos en el bucket
         response = s3_client.list_objects_v2(Bucket=bucket_name)
         if 'Contents' in response:
+            deleted_count = 0
             for obj in response['Contents']:
-                s3_client.delete_object(Bucket=bucket_name, Key=obj['Key'])
-        print(f"Bucket '{bucket_name}' limpiado exitosamente.")
+                # Excluir objetos que estén en el directorio automorphisms/
+                if not obj['Key'].startswith('automorphisms/'):
+                    s3_client.delete_object(Bucket=bucket_name, Key=obj['Key'])
+                    deleted_count += 1
+            
+            print(f"Bucket '{bucket_name}' limpiado exitosamente.")
+            print(f"Se eliminaron {deleted_count} objetos (excluyendo directorio 'automorphisms/').")
+        else:
+            print(f"No hay objetos para eliminar en el bucket '{bucket_name}'.")
         
     except Exception as e:
         print(f"Error al limpiar el bucket '{bucket_name}': {e}")
